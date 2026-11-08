@@ -234,15 +234,45 @@ static NSTimeInterval FMLastSeenEventTime = 0;
 
 // 触摸诊断：每个拦截点一条，节流 1 秒。宿主正常、Guest 失效时，
 // 从诊断页看 stage 就知道触摸到底走到哪一环被拦下。
-static void FMTouchLog(NSString *stage) {
+// probe 级（hook 是否被调用）节流 2 秒，且不受 hidden 限制——
+// hidden=NO 时的静默跳过是之前最大的盲区。
+static void FMTouchLogEx(NSString *stage, NSString *extra) {
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     if(now - FMLastTouchLog < 1.0) return;
     FMLastTouchLog = now;
-    FMLog(@"touch-probe", @{@"stage": stage,
-                            @"hidden": @(FMCachedHidden),
-                            @"style": @(FMCachedStyle),
-                            @"busy": @(FMManagerBusy()),
-                            @"hostUI": @([LCOrbitHost isHostUI])});
+    NSMutableDictionary *details = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"stage": stage,
+        @"hidden": @(FMCachedHidden),
+        @"style": @(FMCachedStyle),
+        @"busy": @(FMManagerBusy()),
+        @"hostUI": @([LCOrbitHost isHostUI]),
+        @"pid": @(getpid()),
+    }];
+    if(extra.length) details[@"extra"] = extra;
+    FMLog(@"touch-probe", details);
+}
+
+static void FMTouchLog(NSString *stage) {
+    FMTouchLogEx(stage, nil);
+}
+
+// not-blank 时报告是哪个控件拦的：知道用户按到了什么，才能调过滤规则。
+static NSString *FMTouchBlockerName(UITouch *touch) {
+    UIView *view = touch.view;
+    if(!view) return @"nil-view";
+    for(UIView *current = view; current; current = current.superview) {
+        if([current isKindOfClass:UIControl.class]) return NSStringFromClass(current.class);
+        if([current isKindOfClass:UITextView.class]) return @"UITextView";
+        if([current isKindOfClass:UITextField.class]) return @"UITextField";
+        Class cell = NSClassFromString(@"UITableViewCell");
+        if(cell && [current isKindOfClass:cell]) return @"UITableViewCell";
+        Class ccell = NSClassFromString(@"UICollectionViewCell");
+        if(ccell && [current isKindOfClass:ccell]) return @"UICollectionViewCell";
+        Class header = NSClassFromString(@"UITableViewHeaderFooterView");
+        if(header && [current isKindOfClass:header]) return @"HeaderFooterView";
+        if([current isKindOfClass:NSClassFromString(@"WKWebView")]) return @"WKWebView";
+    }
+    return nil;
 }
 
 // 长按进行中的状态。用 generation 计数代替 block 取消：
@@ -329,7 +359,10 @@ static void FMProcessTouches(UIEvent *event) {
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     if(now - FMLastCacheRefresh > 1.5) FMRefreshCache();
 
-    if(!FMCachedHidden) { FMCancelPress(); return; }
+    // 入口探针：证明 hook 被调用过、以及当时的隐藏开关状态。
+    if(now - FMLastTouchLog >= 2.0) FMTouchLogEx(@"hook-fired", nil);
+
+    if(!FMCachedHidden) { FMCancelPress(); FMTouchLog(@"skip-hidden-off"); return; }
     if(FMManagerBusy()) { FMCancelPress(); FMTouchLog(@"busy"); return; }
 
     // 多指操作（缩放、双指滚动等）不拦。
@@ -341,7 +374,7 @@ static void FMProcessTouches(UIEvent *event) {
     for(UITouch *touch in event.allTouches) {
         switch(touch.phase) {
             case UITouchPhaseBegan:
-                if(!FMTouchIsBlank(touch)) { FMTouchLog(@"not-blank"); break; }
+                if(!FMTouchIsBlank(touch)) { FMTouchLogEx(@"not-blank", FMTouchBlockerName(touch)); break; }
                 FMTouchLog(@"began-ok");
                 FMHandleBegan(touch);
                 break;
@@ -656,6 +689,9 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
 @implementation FMSummonCenter
 
 + (void)load {
+    FMLog(@"hidden-bead-loaded", @{@"pid": @(getpid()),
+                                    @"hostUI": @([LCOrbitHost isHostUI]),
+                                    @"bundle": NSBundle.mainBundle.bundleIdentifier ?: @""});
     Class module = NSClassFromString(@"LCFloatingMenuModule");
     Class manager = NSClassFromString(@"FMManager");
 
