@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v5"
+#define FM_MENU_VERSION @"1.0.36v6"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4693,11 +4693,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self appearanceModeControl:s];
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
-        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠形态、展开栏布局、透明度与回弹动画",nil,nil,self,@selector(openDock)) height:60 to:s];
         {
-            // 微珠显隐子页（隐藏微珠 / 呼出手势 / 摇一摇显隐），实现在 FMHiddenBeadModule.m。
-            extern UIView *FMBeadVisibilityRow(void);
-            [self addRow:FMBeadVisibilityRow() height:60 to:s];
+            // 微珠显隐子页（隐藏微珠 / 呼出手势 / 摇一摇显隐）。
+            // 用 NSClassFromString 运行时查找，不直接链接模块符号——测试 harness
+            // 只编译主文件，直接链接会 undefined symbol；类未注册时这里安静跳过。
+            Class rowClass = NSClassFromString(@"FMBeadVisibilityRow");
+            UIView *beadRow = rowClass ? [rowClass new] : nil;
+            if(beadRow) [self addRow:beadRow height:60 to:s];
         }
         [self spacer:s size:16];
         [self diyPage:s];

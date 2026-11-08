@@ -400,6 +400,8 @@ static void FMSyncUI(void) {
 
 // 入口行：仿上游 FMSettingsNavigationRow 的观感（标题 + 副标题 + 右箭头），
 // 但完全自绘——上游那组是 static 函数，别的编译单元引用不到。
+// 上游补丁用 NSClassFromString(@"FMBeadVisibilityRow") 创建本类，避免跨编译
+// 单元链接（测试 harness 只编译主文件，直接链接会 undefined symbol）。
 @interface FMBeadVisibilityRow : UIControl
 @end
 
@@ -483,10 +485,6 @@ static void FMSyncUI(void) {
     [presenter presentViewController:nav animated:YES completion:nil];
 }
 @end
-
-UIView *FMBeadVisibilityRow(void) {
-    return [[FMBeadVisibilityRow alloc] initWithFrame:CGRectZero];
-}
 
 // 子页：三行设置（接口声明见上方）。
 @implementation FMBeadVisibilityController {
