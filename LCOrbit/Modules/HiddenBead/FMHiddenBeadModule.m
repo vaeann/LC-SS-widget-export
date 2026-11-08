@@ -179,16 +179,17 @@ static BOOL FMManagerBusy(void) {
            FMBoolIvar(manager, "_morphActive");
 }
 
-// 面板收合时呼出。
+// 面板收合时呼出。每个拒绝条件都记 open-rejected + 具体原因，
+// 避免"调了 toggle 但面板没出来"却看不到是哪道检查拦的。
 static void FMOpenPanel(NSString *trigger) {
     id manager = FMSharedManager();
-    if(!manager) return;
-    if(FMBool(manager, @"isOpen")) return;
-    if(FMObject(manager, @"settingsWindow")) return;
-    if(FMBoolIvar(manager, "_morphActive")) return;
+    if(!manager) { FMLog(@"open-rejected", @{@"reason": @"no-manager"}); return; }
+    if(FMBool(manager, @"isOpen")) { FMLog(@"open-rejected", @{@"reason": @"already-open"}); return; }
+    if(FMObject(manager, @"settingsWindow")) { FMLog(@"open-rejected", @{@"reason": @"settings-window"}); return; }
+    if(FMBoolIvar(manager, "_morphActive")) { FMLog(@"open-rejected", @{@"reason": @"morph-active"}); return; }
 
     SEL toggle = NSSelectorFromString(@"toggle");
-    if(![manager respondsToSelector:toggle]) return;
+    if(![manager respondsToSelector:toggle]) { FMLog(@"open-rejected", @{@"reason": @"no-toggle"}); return; }
     ((void (*)(id, SEL))objc_msgSend)(manager, toggle);
     FMHapticLight();
     FMLog(@"hidden-bead-open", trigger ? @{@"trigger": trigger} : nil);
@@ -228,7 +229,8 @@ static BOOL FMTouchIsBlank(UITouch *touch) {
 static BOOL FMCachedHidden = NO;
 static NSInteger FMCachedStyle = 0;
 static NSTimeInterval FMLastCacheRefresh = 0;
-static NSTimeInterval FMLastTouchLog = 0;
+static NSTimeInterval FMLastHookLog = 0;     // hook 入口探针节流（2s）
+static NSTimeInterval FMLastStageLog = 0;    // 判定链节流（1s），与入口分开
 static void *FMLastSeenEvent = NULL;
 static NSTimeInterval FMLastSeenEventTime = 0;
 
@@ -236,10 +238,16 @@ static NSTimeInterval FMLastSeenEventTime = 0;
 // 从诊断页看 stage 就知道触摸到底走到哪一环被拦下。
 // probe 级（hook 是否被调用）节流 2 秒，且不受 hidden 限制——
 // hidden=NO 时的静默跳过是之前最大的盲区。
-static void FMTouchLogEx(NSString *stage, NSString *extra) {
+// kind: 0=判定链（1s 节流） 1=hook 入口（2s 节流，独立通道不被判定日志抢占）
+static void FMTouchLogEx(NSString *stage, NSString *extra, NSInteger kind) {
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
-    if(now - FMLastTouchLog < 1.0) return;
-    FMLastTouchLog = now;
+    if(kind == 1) {
+        if(now - FMLastHookLog < 2.0) return;
+        FMLastHookLog = now;
+    } else {
+        if(now - FMLastStageLog < 1.0) return;
+        FMLastStageLog = now;
+    }
     NSMutableDictionary *details = [NSMutableDictionary dictionaryWithDictionary:@{
         @"stage": stage,
         @"hidden": @(FMCachedHidden),
@@ -253,26 +261,30 @@ static void FMTouchLogEx(NSString *stage, NSString *extra) {
 }
 
 static void FMTouchLog(NSString *stage) {
-    FMTouchLogEx(stage, nil);
+    FMTouchLogEx(stage, nil, 0);
 }
 
-// not-blank 时报告是哪个控件拦的：知道用户按到了什么，才能调过滤规则。
+// not-blank 时记录从触摸点往上的视图链（前 8 层），并标出第一个黑名单类。
+// App 内容层级深，只看第一个黑名单类不够，整条链能直接看出是谁在拦。
 static NSString *FMTouchBlockerName(UITouch *touch) {
     UIView *view = touch.view;
     if(!view) return @"nil-view";
-    for(UIView *current = view; current; current = current.superview) {
-        if([current isKindOfClass:UIControl.class]) return NSStringFromClass(current.class);
-        if([current isKindOfClass:UITextView.class]) return @"UITextView";
-        if([current isKindOfClass:UITextField.class]) return @"UITextField";
-        Class cell = NSClassFromString(@"UITableViewCell");
-        if(cell && [current isKindOfClass:cell]) return @"UITableViewCell";
-        Class ccell = NSClassFromString(@"UICollectionViewCell");
-        if(ccell && [current isKindOfClass:ccell]) return @"UICollectionViewCell";
-        Class header = NSClassFromString(@"UITableViewHeaderFooterView");
-        if(header && [current isKindOfClass:header]) return @"HeaderFooterView";
-        if([current isKindOfClass:NSClassFromString(@"WKWebView")]) return @"WKWebView";
+    NSMutableArray *chain = [NSMutableArray array];
+    NSString *blocker = nil;
+    int depth = 0;
+    for(UIView *current = view; current && depth < 8; current = current.superview, depth++) {
+        [chain addObject:NSStringFromClass(current.class)];
+        if(blocker) continue;
+        if([current isKindOfClass:UIControl.class]) blocker = NSStringFromClass(current.class);
+        else if([current isKindOfClass:UITextView.class]) blocker = @"UITextView";
+        else if([current isKindOfClass:UITextField.class]) blocker = @"UITextField";
+        else if([current isKindOfClass:NSClassFromString(@"UITableViewCell")]) blocker = @"UITableViewCell";
+        else if([current isKindOfClass:NSClassFromString(@"UICollectionViewCell")]) blocker = @"UICollectionViewCell";
+        else if([current isKindOfClass:NSClassFromString(@"UITableViewHeaderFooterView")]) blocker = @"HeaderFooterView";
+        else if([current isKindOfClass:NSClassFromString(@"WKWebView")]) blocker = @"WKWebView";
     }
-    return nil;
+    NSString *path = [chain componentsJoinedByString:@" < "];
+    return blocker ? [NSString stringWithFormat:@"%@  ||链: %@", blocker, path] : path;
 }
 
 // 长按进行中的状态。用 generation 计数代替 block 取消：
@@ -359,8 +371,9 @@ static void FMProcessTouches(UIEvent *event) {
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     if(now - FMLastCacheRefresh > 1.5) FMRefreshCache();
 
-    // 入口探针：证明 hook 被调用过、以及当时的隐藏开关状态。
-    if(now - FMLastTouchLog >= 2.0) FMTouchLogEx(@"hook-fired", nil);
+    // 入口探针：证明 hook 被调用过、以及当时的隐藏开关状态。独立节流通道，
+    // 不会再抢占同 1 秒内的判定日志（began-ok/not-blank）。
+    if(now - FMLastHookLog >= 2.0) FMTouchLogEx(@"hook-fired", nil, 1);
 
     // 呼出手势不依赖微珠显隐状态：微珠显示时同样可以长按/双击呼出。
     // 早期版本限定"仅隐藏时生效"，用户在显示态下误以为手势失效，故解除绑定。
@@ -371,12 +384,12 @@ static void FMProcessTouches(UIEvent *event) {
     NSInteger beganCount = 0;
     for(UITouch *counted in event.allTouches)
         if(counted.phase == UITouchPhaseBegan) beganCount++;
-    if(beganCount > 1) return;
+    if(beganCount > 1) { FMTouchLog(@"multi-touch"); return; }
 
     for(UITouch *touch in event.allTouches) {
         switch(touch.phase) {
             case UITouchPhaseBegan:
-                if(!FMTouchIsBlank(touch)) { FMTouchLogEx(@"not-blank", FMTouchBlockerName(touch)); break; }
+                if(!FMTouchIsBlank(touch)) { FMTouchLogEx(@"not-blank", FMTouchBlockerName(touch), 0); break; }
                 FMTouchLog(@"began-ok");
                 FMHandleBegan(touch);
                 break;
