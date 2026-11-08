@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v6"
+#define FM_MENU_VERSION @"1.0.36v7"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -111,17 +111,33 @@ static NSDictionary *FMCacheUpdateRelease(NSDictionary *candidate,NSUInteger seq
 }
 static NSTimeInterval const FMUpdateRefreshInterval=6*60*60;
 static NSTimeInterval const FMUpdateRetryInterval=15*60;
-static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
-    NSArray *a=[latest componentsSeparatedByString:@"."],*b=[installed componentsSeparatedByString:@"."];
-    if(a.count!=3 || b.count!=3) return NSNotFound;
+// 1.0.36v2 -> {1,0,36,2}；没有后缀时第四段为 0，后缀只允许出现在第三段。
+static BOOL FMVersionParts(NSString *version,NSInteger parts[4]) {
+    if(![version isKindOfClass:NSString.class]) return NO;
+    NSArray *segments=[version componentsSeparatedByString:@"."];
+    if(segments.count!=3) return NO;
+    parts[3]=0;
     for(NSUInteger i=0;i<3;i++) {
-        for(NSString *part in @[a[i],b[i]]) {
-            if(!part.length || [part rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound)
-                return NSNotFound;
+        NSString *segment=segments[i],*digits=segment;
+        NSRange marker=[segment rangeOfString:@"v" options:NSBackwardsSearch];
+        if(marker.location!=NSNotFound) {
+            if(i!=2) return NO;
+            digits=[segment substringToIndex:marker.location];
+            NSString *tail=[segment substringFromIndex:marker.location+1];
+            if(!tail.length || [tail rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return NO;
+            parts[3]=[tail integerValue];
         }
-        NSInteger x=[a[i] integerValue],y=[b[i] integerValue];
-        if(x>y) return NSOrderedDescending;
-        if(x<y) return NSOrderedAscending;
+        if(!digits.length || [digits rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return NO;
+        parts[i]=[digits integerValue];
+    }
+    return YES;
+}
+static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
+    NSInteger a[4],b[4];
+    if(!FMVersionParts(latest,a) || !FMVersionParts(installed,b)) return NSNotFound;
+    for(NSUInteger i=0;i<4;i++) {
+        if(a[i]>b[i]) return NSOrderedDescending;
+        if(a[i]<b[i]) return NSOrderedAscending;
     }
     return NSOrderedSame;
 }
