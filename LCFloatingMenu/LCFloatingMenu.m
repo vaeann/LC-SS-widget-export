@@ -26,12 +26,12 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36"
+#define FM_MENU_VERSION @"1.0.36v1"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
-static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
-static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/fm-latest";
+static NSString *const FMRepositoryURL=@"https://github.com/vaeann/LC-SS-widget-export";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/tags/fm-latest";
 static NSString *const FMUpdateCacheVersion=@"LCFloatingMenu.updateIndicator.latestVersion";
 static NSString *const FMUpdateCacheTime=@"LCFloatingMenu.updateIndicator.lastAttempt";
 static NSString *const FMUpdateCacheSuccess=@"LCFloatingMenu.updateIndicator.lastSuccess";
@@ -61,7 +61,7 @@ static void FMFetchUpdateRelease(NSTimeInterval timeout,void (^completion)(NSDic
         if(![release[@"notes"] isEqualToString:@"此版本未提供更新说明。"])
             {completion(release,nil,sequence);return;}
         NSString *version=release[@"version"];
-        NSURL *notesURL=[NSURL URLWithString:[@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/"
+        NSURL *notesURL=[NSURL URLWithString:[@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/tags/"
             stringByAppendingString:version]];
         NSURLRequest *notesRequest=[LCOrbitGitHub requestForURL:notesURL timeout:timeout error:nil];
         if(!notesRequest) {completion(release,nil,sequence);return;}
@@ -111,17 +111,33 @@ static NSDictionary *FMCacheUpdateRelease(NSDictionary *candidate,NSUInteger seq
 }
 static NSTimeInterval const FMUpdateRefreshInterval=6*60*60;
 static NSTimeInterval const FMUpdateRetryInterval=15*60;
-static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
-    NSArray *a=[latest componentsSeparatedByString:@"."],*b=[installed componentsSeparatedByString:@"."];
-    if(a.count!=3 || b.count!=3) return NSNotFound;
+// 1.0.36v2 -> {1,0,36,2}；没有后缀时第四段为 0，后缀只允许出现在第三段。
+static BOOL FMVersionParts(NSString *version,NSInteger parts[4]) {
+    if(![version isKindOfClass:NSString.class]) return NO;
+    NSArray *segments=[version componentsSeparatedByString:@"."];
+    if(segments.count!=3) return NO;
+    parts[3]=0;
     for(NSUInteger i=0;i<3;i++) {
-        for(NSString *part in @[a[i],b[i]]) {
-            if(!part.length || [part rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound)
-                return NSNotFound;
+        NSString *segment=segments[i],*digits=segment;
+        NSRange marker=[segment rangeOfString:@"v" options:NSBackwardsSearch];
+        if(marker.location!=NSNotFound) {
+            if(i!=2) return NO;
+            digits=[segment substringToIndex:marker.location];
+            NSString *tail=[segment substringFromIndex:marker.location+1];
+            if(!tail.length || [tail rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return NO;
+            parts[3]=[tail integerValue];
         }
-        NSInteger x=[a[i] integerValue],y=[b[i] integerValue];
-        if(x>y) return NSOrderedDescending;
-        if(x<y) return NSOrderedAscending;
+        if(!digits.length || [digits rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return NO;
+        parts[i]=[digits integerValue];
+    }
+    return YES;
+}
+static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
+    NSInteger a[4],b[4];
+    if(!FMVersionParts(latest,a) || !FMVersionParts(installed,b)) return NSNotFound;
+    for(NSUInteger i=0;i<4;i++) {
+        if(a[i]>b[i]) return NSOrderedDescending;
+        if(a[i]<b[i]) return NSOrderedAscending;
     }
     return NSOrderedSame;
 }
@@ -6787,7 +6803,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         [access.heightAnchor constraintEqualToConstant:60].active=YES;
     }
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
-        subtitle:@"github.com/dompling/LC-SS-widget-export"
+        subtitle:@"github.com/vaeann/LC-SS-widget-export"
         symbol:@"link.circle.fill"
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(openRepository)];
@@ -7927,12 +7943,14 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (UIView *)handleCombinedRow {
     NSInteger selected = 0;
-    if(BoolPref(@"orbDropletPull", NO)) {
+    if(FloatPref(@"orbHandleStyle",0)>=1.5) {
+        selected = 3;
+    } else if(BoolPref(@"orbDropletPull", NO)) {
         selected = 2;
     } else {
         selected = FMOrbHandleIsCapsule() ? 0 : 1;
     }
-    return [self segmentRow:nil items:@[@"胶囊",@"水滴",@"拉动水滴"] key:@"orbHandleCombined" selected:selected];
+    return [self segmentRow:nil items:@[@"胶囊",@"水滴",@"拉动水滴",@"隐藏微珠"] key:@"orbHandleCombined" selected:selected];
 }
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
@@ -8031,8 +8049,9 @@ static UIView *FMDockCard(UIStackView *rows) {
 // ---- what shows
 - (BOOL)whenHolds:(FMDockWhen)when {
     switch(when) {
-        case FMDockWhenCapsule: return FMOrbHandleIsCapsule();
-        case FMDockWhenDroplet: return !FMOrbHandleIsCapsule();
+        // 隐藏微珠形态下没有把手，胶囊/水滴相关的行一并收起来。
+        case FMDockWhenCapsule: return FloatPref(@"orbHandleStyle",0)<1.5 && FMOrbHandleIsCapsule();
+        case FMDockWhenDroplet: return FloatPref(@"orbHandleStyle",0)<1.5 && !FMOrbHandleIsCapsule();
         case FMDockWhenFade: return BoolPref(@"idleFade",YES);
         case FMDockWhenCompact: return BoolPref(@"compactMode",NO);
         case FMDockWhenList: return !BoolPref(@"compactMode",NO);
@@ -8045,6 +8064,14 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)applyVisibilityAnimated:(BOOL)animated {
     void (^apply)(void)=^{
         FMBeginPreferenceSnapshot();
+        // 隐藏微珠形态下，位置 / 把手 / 透明度三组都作用在看不见的把手上，
+        // 整卡收起；托盘组（展开菜单的外观）保留。
+        BOOL hiddenBead=FloatPref(@"orbHandleStyle",0)>=1.5;
+        if(hiddenBead && self.openGroup!=FMDockGroupTray) self.openGroup=-1;
+        for(NSInteger groupIndex=0;groupIndex<(NSInteger)self.groupStacks.count;groupIndex++) {
+            UIView *card=self.groupStacks[groupIndex].superview;
+            card.hidden=hiddenBead && groupIndex!=FMDockGroupTray;
+        }
         for(UIStackView *rows in self.groupStacks)
             while(rows.arrangedSubviews.count>1) [rows.arrangedSubviews.lastObject removeFromSuperview];
         for(NSDictionary *entry in self.bodyRows) {
@@ -8128,9 +8155,13 @@ static UIView *FMDockCard(UIStackView *rows) {
         } else if(idx == 1) {
             SetPref(@"orbHandleStyle", @1);
             SetPref(@"orbDropletPull", @NO);
-        } else {
+        } else if(idx == 2) {
             SetPref(@"orbHandleStyle", @1);
             SetPref(@"orbDropletPull", @YES);
+        } else {
+            // 隐藏微珠：不绘制把手，展开方式改为单指长按空白页面。
+            SetPref(@"orbHandleStyle", @2);
+            SetPref(@"orbDropletPull", @NO);
         }
         [self applyHandleNote];
         [self applyVisibilityAnimated:YES];

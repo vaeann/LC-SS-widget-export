@@ -115,7 +115,7 @@ static void Check(BOOL ok,NSString *name) {
     Checks++;if(!ok) {Failures++;fprintf(stderr,"FAIL %s\n",name.UTF8String);}
 }
 int main(void) { @autoreleasepool {
-    NSURL *api=[NSURL URLWithString:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/fm-latest"];
+    NSURL *api=[NSURL URLWithString:@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/tags/fm-latest"];
     NSError *error=nil;
     NSMutableURLRequest *r=[LCOrbitGitHub requestForURL:api timeout:12 error:&error];
     Check(r && !error && ![r valueForHTTPHeaderField:@"Authorization"],@"anonymous update remains available");
@@ -220,13 +220,13 @@ int main(void) { @autoreleasepool {
     Check(assetClass!=Nil,@"release downloads have a streaming delegate");
     Check([LCOrbitGitHub respondsToSelector:@selector(downloadReleaseAsset:progress:completion:)],@"release downloads expose progress API");
     if(assetClass && [LCOrbitGitHub respondsToSelector:@selector(downloadReleaseAsset:progress:completion:)]) {
-        NSString *browser=@"https://github.com/dompling/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib";
+        NSString *browser=@"https://github.com/vaeann/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib";
         FixtureResponseData=[NSJSONSerialization dataWithJSONObject:@{@"assets":@[@{@"id":@123,@"name":@"LCFloatingMenu.dylib",@"browser_download_url":browser}]} options:0 error:nil];
         __block NSData *binary=nil;__block NSError *assetError=nil;
         __block int64_t received=-1,expected=-1;__block NSUInteger completions=0;
         [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:browser] progress:^(int64_t got,int64_t total){received=got;expected=total;}
             completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){binary=data;assetError=failure;completions++;}];
-        Check([CapturedRequest.URL.absoluteString isEqual:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/123"],@"download resolves official asset ID through release API");
+        Check([CapturedRequest.URL.absoluteString isEqual:@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/assets/123"],@"download resolves official asset ID through release API");
         Check([[CapturedRequest valueForHTTPHeaderField:@"Authorization"] isEqual:@"Bearer ghp_fixture2"],@"binary API request uses configured host token");
         Check([[CapturedRequest valueForHTTPHeaderField:@"Accept"] isEqual:@"application/octet-stream"],@"binary API request accepts actual asset bytes");
         id<NSURLSessionDataDelegate> assetDelegate=CapturedDelegate;
@@ -234,7 +234,7 @@ int main(void) { @autoreleasepool {
         GHFixtureDataTask *fixtureTask=[GHFixtureDataTask new];fixtureTask.currentRequest=CapturedRequest;
         NSURLSessionDataTask *task=(id)fixtureTask;
         for(NSString *url in @[@"https://release-assets.githubusercontent.com/asset?sig=fixture",@"https://objects.githubusercontent.com/asset",
-            @"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/456",@"https://evil.test/steal",@"http://release-assets.githubusercontent.com/asset",
+            @"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/assets/456",@"https://evil.test/steal",@"http://release-assets.githubusercontent.com/asset",
             @"https://release-assets.githubusercontent.com:444/asset",@"https://release-assets.githubusercontent.com.evil.test/asset"]) {
             NSMutableURLRequest *proposed=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
             [proposed setValue:@"Bearer ghp_fixture2" forHTTPHeaderField:@"Authorization"];

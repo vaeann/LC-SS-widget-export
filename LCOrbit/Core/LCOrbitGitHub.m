@@ -170,14 +170,14 @@ static const NSUInteger GHAssetLimit=32*1024*1024;
                   completion:(void (^)(NSData *,NSHTTPURLResponse *,NSError *))completion {
     NSError *error=nil;
     if(!GHHost(&error)) {completion(nil,nil,error);return;}
-    NSString *pattern=@"^https://github\\.com/dompling/LC-SS-widget-export/releases/download/[A-Za-z0-9_-][A-Za-z0-9._-]*/LCFloatingMenu\\.dylib$";
+    NSString *pattern=@"^https://github\\.com/vaeann/LC-SS-widget-export/releases/download/[A-Za-z0-9_-][A-Za-z0-9._-]*/LCFloatingMenu\\.dylib$";
     NSString *link=browserURL.absoluteString;
     NSRange match=[link rangeOfString:pattern options:NSRegularExpressionSearch];
     if(!link.length || match.location!=0 || match.length!=link.length) {
         completion(nil,nil,GHError(6,@"仅允许下载官方发布的微珠插件。"));return;
     }
     NSString *tag=browserURL.URLByDeletingLastPathComponent.lastPathComponent;
-    NSURL *metadataURL=[NSURL URLWithString:[@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/" stringByAppendingString:tag]];
+    NSURL *metadataURL=[NSURL URLWithString:[@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/tags/" stringByAppendingString:tag]];
     NSMutableURLRequest *metadata=[self requestForURL:metadataURL timeout:40 error:&error];
     if(!metadata) {completion(nil,nil,error);return;}
     [self performRequest:metadata completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure) {
@@ -197,7 +197,7 @@ static const NSUInteger GHAssetLimit=32*1024*1024;
             break;
         }
         if(!identifier) {completion(nil,response,GHError(11,@"未找到对应版本的插件资源，请重新检查更新。"));return;}
-        NSURL *assetURL=[NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/%@",identifier]];
+        NSURL *assetURL=[NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/vaeann/LC-SS-widget-export/releases/assets/%@",identifier]];
         NSError *requestError=nil;
         NSMutableURLRequest *request=[self requestForURL:assetURL timeout:40 error:&requestError];
         if(!request) {completion(nil,nil,requestError);return;}

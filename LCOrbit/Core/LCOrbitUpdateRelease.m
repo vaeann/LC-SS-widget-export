@@ -11,7 +11,8 @@ static BOOL RMatches(id value,NSString *pattern) {
     return match.location==0 && match.length==[value length];
 }
 static BOOL RVersion(id value) {
-    return RMatches(value,@"^[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}$");
+    // 允许 vN 构建后缀：1.0.36 与 1.0.36v2 都算合法。
+    return RMatches(value,@"^[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}(v[0-9]{1,6})?$");
 }
 @implementation LCOrbitUpdateRelease
 + (NSString *)notesFromBody:(id)body {
@@ -64,7 +65,7 @@ static BOOL RVersion(id value) {
        ![release[@"downloadURL"] isKindOfClass:NSString.class] ||
        ![release[@"notes"] isKindOfClass:NSString.class]) return RFail(error);
     NSString *link=release[@"downloadURL"];
-    NSString *prefix=@"https://github.com/dompling/LC-SS-widget-export/releases/download/";
+    NSString *prefix=@"https://github.com/vaeann/LC-SS-widget-export/releases/download/";
     NSURL *url=[NSURL URLWithString:link];
     NSArray<NSString *> *parts=url.path.pathComponents;
     if(![link hasPrefix:prefix] || !url || url.user || url.password || url.fragment ||
@@ -77,12 +78,34 @@ static BOOL RVersion(id value) {
         @"downloadURL":link,@"sha256":release[@"sha256"],
         @"notes":notes.length?notes:@"此版本未提供更新说明。"};
 }
+// 1.0.36v2 -> @[@"1",@"0",@"36",@"2"]；后缀缺失时第四段为 @"0"。
++ (NSArray<NSString *> *)numericPartsOf:(NSString *)version {
+    if(![version isKindOfClass:NSString.class]) return nil;
+    NSArray *segments=[version componentsSeparatedByString:@"."];
+    if(segments.count!=3) return nil;
+    NSInteger revision=0;
+    NSString *last=segments[2],*digits=last;
+    NSRange marker=[last rangeOfString:@"v" options:NSBackwardsSearch];
+    if(marker.location!=NSNotFound) {
+        digits=[last substringToIndex:marker.location];
+        NSString *tail=[last substringFromIndex:marker.location+1];
+        if(!tail.length || [tail rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return nil;
+        revision=[tail integerValue];
+    }
+    if(!digits.length || [digits rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return nil;
+    for(NSUInteger i=0;i<2;i++) {
+        NSString *segment=segments[i];
+        if(!segment.length || [segment rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound) return nil;
+    }
+    return @[segments[0],segments[1],digits,[@(revision) stringValue]];
+}
 + (BOOL)isNewerRelease:(NSDictionary *)release thanVersion:(NSString *)installed {
     NSDictionary *valid=[self validatedRelease:release error:nil];
     if(!valid || !RVersion(installed)) return NO;
-    NSArray *latest=[valid[@"version"] componentsSeparatedByString:@"."];
-    NSArray *current=[installed componentsSeparatedByString:@"."];
-    for(NSUInteger i=0;i<3;i++) {
+    NSArray<NSString *> *latest=[self numericPartsOf:valid[@"version"]];
+    NSArray<NSString *> *current=[self numericPartsOf:installed];
+    if(latest.count!=4 || current.count!=4) return NO;
+    for(NSUInteger i=0;i<4;i++) {
         NSInteger a=[latest[i] integerValue],b=[current[i] integerValue];
         if(a!=b) return a>b;
     }

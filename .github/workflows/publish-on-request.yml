@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid source version"; exit 1; }
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(v[0-9]+)?$ ]] || { echo "::error::Invalid source version"; exit 1; }
           REQUEST=".github/release-requests/$VERSION.txt"
           test -s "$REQUEST" || { echo "::error::Expected release request $REQUEST"; exit 1; }
           NOTES="LCFloatingMenu/RELEASE_NOTES_$VERSION.md"
@@ -48,10 +48,23 @@ jobs:
             --notes-file "$NOTES" --latest
           printf 'FM_VERSION=%s\nFM_COMMIT=%s\nFM_TAG=%s\n' "$VERSION" "$GITHUB_SHA" "$VERSION" > dist/latest-info.txt
           CURRENT="$(gh release view fm-latest --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null | sed -n 's/^FM_VERSION=//p' | head -n 1 || true)"
-          if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            IFS=. read -r a b c <<< "$CURRENT"
-            IFS=. read -r x y z <<< "$VERSION"
+          if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(v[0-9]+)?$ ]]; then
+            # 版本可能带 vN 构建后缀：先比三段，再比后缀。
+            current_base="${CURRENT%%v*}"
+            next_base="${VERSION%%v*}"
+            current_rev=0
+            next_rev=0
+            [[ "$CURRENT" == *v* ]] && current_rev="${CURRENT##*v}"
+            [[ "$VERSION" == *v* ]] && next_rev="${VERSION##*v}"
+            IFS=. read -r a b c <<< "$current_base"
+            IFS=. read -r x y z <<< "$next_base"
+            newer=0
             if (( 10#$a > 10#$x || (10#$a == 10#$x && 10#$b > 10#$y) || (10#$a == 10#$x && 10#$b == 10#$y && 10#$c > 10#$z) )); then
+              newer=1
+            elif (( 10#$a == 10#$x && 10#$b == 10#$y && 10#$c == 10#$z && 10#$current_rev > 10#$next_rev )); then
+              newer=1
+            fi
+            if (( newer )); then
               echo "Keeping newer fm-latest=$CURRENT"
               exit 0
             fi

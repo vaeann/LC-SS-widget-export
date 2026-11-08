@@ -61,6 +61,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitTweakCenterViews.m" \
     "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m" \
     "$ROOT/LCOrbit/Core/LCOrbitLogViewer.m" \
+    "$ROOT/LCOrbit/Modules/HiddenBead/FMHiddenBeadModule.m" \
     "$ROOT/LCFloatingMenu/LCFloatingMenu.m" \
     -o "$OUT"
 file "$OUT"

@@ -6,7 +6,7 @@ static NSDictionary *Fixture(NSString *version,NSString *notes) {
     NSString *body=[NSString stringWithFormat:@"FM_VERSION=%@\nFM_COMMIT=%@\nFM_TAG=%@\n\n%@",version,
         [@"a" stringByPaddingToLength:40 withString:@"a" startingAtIndex:0],version,notes];
     return @{@"body":body,@"assets":@[@{@"name":@"LCFloatingMenu.dylib",
-        @"browser_download_url":@"https://github.com/dompling/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib",
+        @"browser_download_url":@"https://github.com/vaeann/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib",
         @"digest":[@"sha256:" stringByPaddingToLength:71 withString:@"a" startingAtIndex:0]}]};
 }
 int main(void) {@autoreleasepool {
@@ -37,16 +37,16 @@ int main(void) {@autoreleasepool {
         NSMutableDictionary *bad=[r mutableCopy];bad[field]=@42;error=nil;
         Check(![LCOrbitUpdateRelease validatedRelease:bad error:&error] && error,[@"wrong cache type rejected " stringByAppendingString:field]);
     }
-    for(NSString *url in @[@"http://github.com/dompling/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib",
+    for(NSString *url in @[@"http://github.com/vaeann/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib",
         @"https://evil.test/LCFloatingMenu.dylib",@"https://github.com/evil/repo/releases/download/x/LCFloatingMenu.dylib",
-        @"https://github.com@evil.test/dompling/LC-SS-widget-export/releases/download/x/LCFloatingMenu.dylib"]) {
+        @"https://github.com@evil.test/vaeann/LC-SS-widget-export/releases/download/x/LCFloatingMenu.dylib"]) {
         NSMutableDictionary *bad=[r mutableCopy];bad[@"downloadURL"]=url;
         Check(![LCOrbitUpdateRelease validatedRelease:bad error:nil],@"cache cannot redirect install to foreign release");
     }
     NSMutableDictionary *newlineVersion=[r mutableCopy];newlineVersion[@"version"]=@"1.0.8\n";
     Check(![LCOrbitUpdateRelease validatedRelease:newlineVersion error:nil],@"cache version cannot contain trailing newline");
-    for(NSString *url in @[@"https://github.com/dompling/LC-SS-widget-export/releases/download/../../evil/LCFloatingMenu.dylib",
-        @"https://github.com/dompling/LC-SS-widget-export/releases/download/%2e%2e/LCFloatingMenu.dylib"]) {
+    for(NSString *url in @[@"https://github.com/vaeann/LC-SS-widget-export/releases/download/../../evil/LCFloatingMenu.dylib",
+        @"https://github.com/vaeann/LC-SS-widget-export/releases/download/%2e%2e/LCFloatingMenu.dylib"]) {
         NSMutableDictionary *bad=[r mutableCopy];bad[@"downloadURL"]=url;
         Check(![LCOrbitUpdateRelease validatedRelease:bad error:nil],@"release asset path cannot traverse repository");
     }

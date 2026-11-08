@@ -33,8 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$GITHUB_REF_NAME"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::Use a tag such as 1.0.1 (no v prefix or build suffix)."
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(v[0-9]+)?$ ]] || {
+            echo "::error::Use a tag such as 1.0.36 or 1.0.36v1."
             exit 1
           }
           SOURCE_VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
@@ -80,6 +80,10 @@ jobs:
           LATEST_TAG="fm-latest"
           BINARY="dist/LCFloatingMenu.dylib"
           test -s "$BINARY"
+          # 规范名 LCFloatingMenu.dylib 必须保留：应用内更新与插件中心按这个名字找。
+          # 另存一份带版本号的副本，方便人认。
+          NAMED="dist/LCFloatingMenu-${VERSION}.dylib"
+          cp "$BINARY" "$NAMED"
           sha256sum "$BINARY" || shasum -a 256 "$BINARY"
 
           # Keep the actual .dylib name unchanged in BOTH releases.
@@ -91,10 +95,10 @@ jobs:
           fi
           # A version tag is immutable; re-running updates its asset only.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$BINARY" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$BINARY" "$NAMED" --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
           else
-            gh release create "$TAG" "$BINARY" \
+            gh release create "$TAG" "$BINARY" "$NAMED" \
               --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
               --title "LCFloatingMenu $VERSION" \
               --notes-file "$NOTES" \
@@ -110,12 +114,25 @@ jobs:
           # Never overwrite a newer latest asset when rebuilding an old tag.
           latest_body="$(gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null || true)"
           latest_version="$(printf '%s\n' "$latest_body" | sed -n 's/^FM_VERSION=//p' | head -n 1)"
-          if [[ "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            IFS=. read -r a b c <<< "$latest_version"
-            IFS=. read -r x y z <<< "$VERSION"
+          if [[ "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(v[0-9]+)?$ ]]; then
+            # 版本可能带 vN 构建后缀：先比三段，再比后缀。
+            latest_base="${latest_version%%v*}"
+            next_base="${VERSION%%v*}"
+            latest_rev=0
+            next_rev=0
+            [[ "$latest_version" == *v* ]] && latest_rev="${latest_version##*v}"
+            [[ "$VERSION" == *v* ]] && next_rev="${VERSION##*v}"
+            IFS=. read -r a b c <<< "$latest_base"
+            IFS=. read -r x y z <<< "$next_base"
+            newer=0
             if (( 10#$a > 10#$x ||
                   (10#$a == 10#$x && 10#$b > 10#$y) ||
                   (10#$a == 10#$x && 10#$b == 10#$y && 10#$c > 10#$z) )); then
+              newer=1
+            elif (( 10#$a == 10#$x && 10#$b == 10#$y && 10#$c == 10#$z && 10#$latest_rev > 10#$next_rev )); then
+              newer=1
+            fi
+            if (( newer )); then
               echo "The current FloatingMenu latest ($latest_version) is newer than $VERSION; keeping it."
               exit 0
             fi
