@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v1"
+#define FM_MENU_VERSION @"1.0.36v2"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -8064,14 +8064,6 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)applyVisibilityAnimated:(BOOL)animated {
     void (^apply)(void)=^{
         FMBeginPreferenceSnapshot();
-        // 隐藏微珠形态下，位置 / 把手 / 透明度三组都作用在看不见的把手上，
-        // 整卡收起；托盘组（展开菜单的外观）保留。
-        BOOL hiddenBead=FloatPref(@"orbHandleStyle",0)>=1.5;
-        if(hiddenBead && self.openGroup!=FMDockGroupTray) self.openGroup=-1;
-        for(NSInteger groupIndex=0;groupIndex<(NSInteger)self.groupStacks.count;groupIndex++) {
-            UIView *card=self.groupStacks[groupIndex].superview;
-            card.hidden=hiddenBead && groupIndex!=FMDockGroupTray;
-        }
         for(UIStackView *rows in self.groupStacks)
             while(rows.arrangedSubviews.count>1) [rows.arrangedSubviews.lastObject removeFromSuperview];
         for(NSDictionary *entry in self.bodyRows) {
