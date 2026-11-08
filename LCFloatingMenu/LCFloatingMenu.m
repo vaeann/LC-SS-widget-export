@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v9"
+#define FM_MENU_VERSION @"1.0.36v10"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4709,6 +4709,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self appearanceModeControl:s];
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
+        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠形态、展开栏布局、透明度与回弹动画",nil,nil,self,@selector(openDock)) height:60 to:s];
         {
             // 微珠显隐子页（隐藏微珠 / 呼出手势 / 摇一摇显隐）。
             // 用 NSClassFromString 运行时查找，不直接链接模块符号——测试 harness
