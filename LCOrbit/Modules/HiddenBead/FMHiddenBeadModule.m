@@ -409,7 +409,7 @@ static void FMSyncUI(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:CGRectMake(0, 0, 320, 60)];
     if(self) {
-        self.backgroundColor = [UIColor secondarySystemGroupedBackground];
+        self.backgroundColor = UIColor.secondarySystemGroupedBackground;
         self.layer.cornerRadius = 12;
         self.layer.masksToBounds = YES;
 
@@ -496,7 +496,7 @@ static void FMSyncUI(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"微珠显隐";
-    self.view.backgroundColor = [UIColor systemGroupedBackground];
+    self.view.backgroundColor = UIColor.systemGroupedBackground;
     self.tableView.alwaysBounceVertical = NO;
 }
 
@@ -524,7 +524,7 @@ static void FMSyncUI(void) {
                                            reuseIdentifier:reuse];
     cell.accessoryView = nil;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.backgroundColor = [UIColor secondarySystemGroupedBackground];
+    cell.backgroundColor = UIColor.secondarySystemGroupedBackground;
 
     if(indexPath.section == 0) {
         cell.textLabel.text = @"隐藏微珠";
