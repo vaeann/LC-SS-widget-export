@@ -362,7 +362,9 @@ static void FMProcessTouches(UIEvent *event) {
     // 入口探针：证明 hook 被调用过、以及当时的隐藏开关状态。
     if(now - FMLastTouchLog >= 2.0) FMTouchLogEx(@"hook-fired", nil);
 
-    if(!FMCachedHidden) { FMCancelPress(); FMTouchLog(@"skip-hidden-off"); return; }
+    // 呼出手势不依赖微珠显隐状态：微珠显示时同样可以长按/双击呼出。
+    // 早期版本限定"仅隐藏时生效"，用户在显示态下误以为手势失效，故解除绑定。
+    // （触摸落在微珠自身上时 FMTouchIsBlank 会判 not-blank，不会和点微珠冲突。）
     if(FMManagerBusy()) { FMCancelPress(); FMTouchLog(@"busy"); return; }
 
     // 多指操作（缩放、双指滚动等）不拦。
