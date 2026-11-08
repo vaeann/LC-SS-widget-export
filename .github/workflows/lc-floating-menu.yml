@@ -138,17 +138,12 @@ jobs:
             fi
           fi
 
-          if gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$LATEST_TAG" "$BINARY" dist/latest-info.txt \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "LCFloatingMenu latest ($VERSION)" \
-              --notes-file dist/latest-info.txt --prerelease --latest=false
-          else
-            gh release create "$LATEST_TAG" "$BINARY" dist/latest-info.txt \
-              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "LCFloatingMenu latest ($VERSION)" \
-              --notes-file dist/latest-info.txt --prerelease --latest=false
-          fi
+                    # 每次重建 fm-latest：如果仓库里留着草稿或被改坏的条目，
+          # "只看存在就编辑"的分支会让它永远停在不可见状态，应用内检查更新就一直落空。
+          gh release delete "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$LATEST_TAG" "$BINARY" dist/latest-info.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "LCFloatingMenu latest ($VERSION)" \
+            --notes-file dist/latest-info.txt --prerelease --latest=false
           echo "Versioned: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/LCFloatingMenu.dylib"
           echo "Latest: https://github.com/$GITHUB_REPOSITORY/releases/download/$LATEST_TAG/LCFloatingMenu.dylib"
