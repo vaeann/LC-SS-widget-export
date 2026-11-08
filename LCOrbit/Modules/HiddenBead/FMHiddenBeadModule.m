@@ -45,8 +45,10 @@ static const CGFloat kFMPressMovement = 28.0;
 static const CGFloat kFMFadeFloor = 0.02;
 static const CGFloat kFMFadeSpan = 0.16;
 
-// sendEvent: 的原实现指针。声明必须早于触摸段的使用点。
-static void (*FMOriginalSendEvent)(id, SEL, UIEvent *);
+// sendEvent: 的原实现指针。window 级与 application 级各存一份，
+// 两个入口都 hook，处理前按 event 指针去重。
+static void (*FMOriginalWindowSendEvent)(id, SEL, UIEvent *);
+static void (*FMOriginalAppSendEvent)(id, SEL, UIEvent *);
 
 static CGFloat FMGClamp(CGFloat value, CGFloat low, CGFloat high) {    return value < low ? low : (value > high ? high : value);
 }
@@ -225,6 +227,23 @@ static BOOL FMTouchIsBlank(UITouch *touch) {
 
 static BOOL FMCachedHidden = NO;
 static NSInteger FMCachedStyle = 0;
+static NSTimeInterval FMLastCacheRefresh = 0;
+static NSTimeInterval FMLastTouchLog = 0;
+static void *FMLastSeenEvent = NULL;
+static NSTimeInterval FMLastSeenEventTime = 0;
+
+// 触摸诊断：每个拦截点一条，节流 1 秒。宿主正常、Guest 失效时，
+// 从诊断页看 stage 就知道触摸到底走到哪一环被拦下。
+static void FMTouchLog(NSString *stage) {
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    if(now - FMLastTouchLog < 1.0) return;
+    FMLastTouchLog = now;
+    FMLog(@"touch-probe", @{@"stage": stage,
+                            @"hidden": @(FMCachedHidden),
+                            @"style": @(FMCachedStyle),
+                            @"busy": @(FMManagerBusy()),
+                            @"hostUI": @([LCOrbitHost isHostUI])});
+}
 
 // 长按进行中的状态。用 generation 计数代替 block 取消：
 // 每次新的按压 +1，计时到期时比对，过期的直接跳过，没有所有权问题。
@@ -244,6 +263,7 @@ static void FMRefreshCache(void) {
     FMCachedHidden = FMHiddenMode();
     NSInteger style = FMSummonStyle();
     FMCachedStyle = (style == 1) ? 1 : 0;
+    FMLastCacheRefresh = NSDate.date.timeIntervalSince1970;
 }
 
 static CGFloat FMDistance(CGPoint a, CGPoint b) {
@@ -294,11 +314,23 @@ static void FMHandleBegan(UITouch *touch) {
     }
 }
 
-static void FMReplacementSendEvent(id self, SEL _cmd, UIEvent *event) {
-    if(FMOriginalSendEvent) FMOriginalSendEvent(self, _cmd, event);
+// 触摸处理主逻辑。application 级与 window 级的 sendEvent: 都会走到这里，
+// 同一 event 只处理一次（先去重再判定）。
+static void FMProcessTouches(UIEvent *event) {
+    if(!event) return;
+    // UIEvent 对象用完后地址会被复用，同地址且间隔很近才认为是同一个 event。
+    if(FMLastSeenEvent == (__bridge void *)event &&
+       NSDate.date.timeIntervalSince1970 - FMLastSeenEventTime < 0.5) return;
+    FMLastSeenEvent = (__bridge void *)event;
+    FMLastSeenEventTime = NSDate.date.timeIntervalSince1970;
 
-    if(!FMCachedHidden) return;
-    if(FMManagerBusy()) { FMCancelPress(); return; }
+    // 缓存自愈：FMSyncUI 因故没被调用（上游没重绘、生命周期没到）时，
+    // 1.5 秒内自动刷新一次，不让缓存卡在过期的 NO 上。
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    if(now - FMLastCacheRefresh > 1.5) FMRefreshCache();
+
+    if(!FMCachedHidden) { FMCancelPress(); return; }
+    if(FMManagerBusy()) { FMCancelPress(); FMTouchLog(@"busy"); return; }
 
     // 多指操作（缩放、双指滚动等）不拦。
     NSInteger beganCount = 0;
@@ -309,6 +341,8 @@ static void FMReplacementSendEvent(id self, SEL _cmd, UIEvent *event) {
     for(UITouch *touch in event.allTouches) {
         switch(touch.phase) {
             case UITouchPhaseBegan:
+                if(!FMTouchIsBlank(touch)) { FMTouchLog(@"not-blank"); break; }
+                FMTouchLog(@"began-ok");
                 FMHandleBegan(touch);
                 break;
             case UITouchPhaseMoved:
@@ -325,6 +359,18 @@ static void FMReplacementSendEvent(id self, SEL _cmd, UIEvent *event) {
                 break;
         }
     }
+}
+
+static void FMReplacementWindowSendEvent(id self, SEL _cmd, UIEvent *event) {
+    if(FMOriginalWindowSendEvent) FMOriginalWindowSendEvent(self, _cmd, event);
+    FMProcessTouches(event);
+}
+
+// application 级比 window 级更上游：即使触摸被 LC 的窗口容器改走别的
+// 路径，UIApplication.sendEvent: 依然第一个收到。
+static void FMReplacementAppSendEvent(id self, SEL _cmd, UIEvent *event) {
+    if(FMOriginalAppSendEvent) FMOriginalAppSendEvent(self, _cmd, event);
+    FMProcessTouches(event);
 }
 
 
@@ -620,9 +666,11 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
     ok &= FMSwizzleInstance(manager, @"drawOrb", (IMP)FMReplacementDrawOrb, (IMP *)&FMOriginalDrawOrb);
     ok &= FMSwizzleInstance(manager, @"applyMorphProgress:", (IMP)FMReplacementMorphProgress, (IMP *)&FMOriginalMorphProgress);
     ok &= FMSwizzleOverride(UIWindow.class, @"motionEnded:withEvent:", (IMP)FMReplacementMotion, (IMP *)&FMOriginalMotion);
-    // sendEvent: 是窗口收取触摸的总入口，类级 swizzle 对所有 window 生效，
-    // 不依赖窗口遍历、不受 App 手势竞争影响。
-    ok &= FMSwizzleOverride(UIWindow.class, @"sendEvent:", (IMP)FMReplacementSendEvent, (IMP *)&FMOriginalSendEvent);
+    // sendEvent: 是收取触摸的总入口，类级 swizzle 对所有 window 生效，
+    // 不依赖窗口遍历、不受 App 手势竞争影响。application 级与 window 级
+    // 双保险，处理前按 event 指针去重。
+    ok &= FMSwizzleOverride(UIWindow.class, @"sendEvent:", (IMP)FMReplacementWindowSendEvent, (IMP *)&FMOriginalWindowSendEvent);
+    ok &= FMSwizzleOverride(UIApplication.class, @"sendEvent:", (IMP)FMReplacementAppSendEvent, (IMP *)&FMOriginalAppSendEvent);
 
     if(!ok) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
