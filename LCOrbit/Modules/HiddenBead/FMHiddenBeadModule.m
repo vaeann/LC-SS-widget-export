@@ -488,13 +488,7 @@ UIView *FMBeadVisibilityRow(void) {
     return [[FMBeadVisibilityRow alloc] initWithFrame:CGRectZero];
 }
 
-// 子页：三行设置。
-//   隐藏微珠        开关（ON = 隐藏）
-//   呼出侧栏        长按空白 / 双击空白 / 左胶囊按钮
-//   摇一摇显隐微珠   开关
-@interface FMBeadVisibilityController : UITableViewController
-@end
-
+// 子页：三行设置（接口声明见上方）。
 @implementation FMBeadVisibilityController {
     UISwitch *_hiddenSwitch;
     UISegmentedControl *_summonSegment;
