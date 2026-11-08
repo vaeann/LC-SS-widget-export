@@ -54,6 +54,23 @@ static char kFMCapsuleKey;
 static CGFloat FMGClamp(CGFloat value, CGFloat low, CGFloat high) {    return value < low ? low : (value > high ? high : value);
 }
 
+// 系统 grouped 背景色。UIColor 的 systemGroupedBackground 与
+// secondarySystemGroupedBackground 在这个 SDK 编译环境里取不到（方括号与
+// 点语法都报 not found），用动态色自己合成，色值对齐系统：
+//   secondary: 浅色 #FFFFFF / 深色 #1C1C1E
+//   primary:   浅色 #F2F2F7 / 深色 #000000
+static UIColor *FMGroupedBackground(BOOL secondary) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        BOOL dark = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+        if(secondary) {
+            return dark ? [UIColor colorWithWhite:0.11 alpha:1.0]
+                        : [UIColor colorWithWhite:1.00 alpha:1.0];
+        }
+        return dark ? [UIColor colorWithWhite:0.00 alpha:1.0]
+                    : [UIColor colorWithWhite:0.949 alpha:1.0];
+    }];
+}
+
 static void FMLog(NSString *event, id details) {
     [LCOrbitLog appendEvent:event details:details kind:@"runtime"];
 }
@@ -409,7 +426,7 @@ static void FMSyncUI(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:CGRectMake(0, 0, 320, 60)];
     if(self) {
-        self.backgroundColor = UIColor.secondarySystemGroupedBackground;
+        self.backgroundColor = FMGroupedBackground(YES);
         self.layer.cornerRadius = 12;
         self.layer.masksToBounds = YES;
 
@@ -496,7 +513,7 @@ static void FMSyncUI(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"微珠显隐";
-    self.view.backgroundColor = UIColor.systemGroupedBackground;
+    self.view.backgroundColor = FMGroupedBackground(NO);
     self.tableView.alwaysBounceVertical = NO;
 }
 
@@ -524,7 +541,7 @@ static void FMSyncUI(void) {
                                            reuseIdentifier:reuse];
     cell.accessoryView = nil;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.backgroundColor = UIColor.secondarySystemGroupedBackground;
+    cell.backgroundColor = FMGroupedBackground(YES);
 
     if(indexPath.section == 0) {
         cell.textLabel.text = @"隐藏微珠";
