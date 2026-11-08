@@ -45,8 +45,8 @@ static const CGFloat kFMPressMovement = 28.0;
 static const CGFloat kFMFadeFloor = 0.02;
 static const CGFloat kFMFadeSpan = 0.16;
 
-static char kFMPressGestureKey;
-static char kFMDoubleGestureKey;
+// sendEvent: 的原实现指针。声明必须早于触摸段的使用点。
+static void (*FMOriginalSendEvent)(id, SEL, UIEvent *);
 
 static CGFloat FMGClamp(CGFloat value, CGFloat low, CGFloat high) {    return value < low ? low : (value > high ? high : value);
 }
@@ -229,12 +229,12 @@ static NSInteger FMCachedStyle = 0;
 // 长按进行中的状态。用 generation 计数代替 block 取消：
 // 每次新的按压 +1，计时到期时比对，过期的直接跳过，没有所有权问题。
 static BOOL FMPressActive = NO;
-static CGPoint FMPressOrigin = CGPointZero;
+static CGPoint FMPressOrigin = {0, 0};
 static NSInteger FMPressGeneration = 0;
 
 // 双击判定状态。
 static NSTimeInterval FMLastTapTime = 0;
-static CGPoint FMLastTapPoint = CGPointZero;
+static CGPoint FMLastTapPoint = {0, 0};
 
 static void FMCancelPress(void) {
     FMPressActive = NO;
@@ -527,7 +527,6 @@ static void (*FMOriginalStop)(id, SEL);
 static void (*FMOriginalDrawOrb)(id, SEL);
 static void (*FMOriginalMorphProgress)(id, SEL, CGFloat);
 static void (*FMOriginalMotion)(id, SEL, UIEventSubtype, UIEvent *);
-static void (*FMOriginalSendEvent)(id, SEL, UIEvent *);
 
 static void FMReplacementStart(id self, SEL _cmd, id context) {
     if(FMOriginalStart) FMOriginalStart(self, _cmd, context);
@@ -633,7 +632,5 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
         });
     }
 }
-
-@end
 
 @end
