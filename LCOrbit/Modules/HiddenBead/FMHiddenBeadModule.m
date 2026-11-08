@@ -56,6 +56,12 @@ static BOOL FMHapticEnabled(void) {
     return value ? [value boolValue] : YES;
 }
 
+// 摇一摇呼出，默认关：这个动作容易误触，交给自己在设置里开。
+static BOOL FMShakeEnabled(void) {
+    id value = [LCOrbitStorage objectForKey:@"shakeToOpen" module:kFMModuleName];
+    return value ? [value boolValue] : NO;
+}
+
 #pragma mark - 运行时访问上游对象
 
 static id FMSharedManager(void) {
@@ -181,6 +187,7 @@ static void (*FMOriginalLifecycle)(id, SEL, NSString *, UIWindowScene *);
 static void (*FMOriginalStop)(id, SEL);
 static void (*FMOriginalDrawOrb)(id, SEL);
 static void (*FMOriginalMorphProgress)(id, SEL, CGFloat);
+static void (*FMOriginalMotion)(id, SEL, UIEventSubtype, UIEvent *);
 
 static void FMReplacementStart(id self, SEL _cmd, id context) {
     if(FMOriginalStart) FMOriginalStart(self, _cmd, context);
@@ -229,12 +236,49 @@ static void FMReplacementMorphProgress(id self, SEL _cmd, CGFloat progress) {
     panel.alpha = FMGClamp((progress - kFMFadeFloor) / kFMFadeSpan, 0, 1);
 }
 
+// 摇一摇：motionEnded 是 UIResponder 的方法，直接改 UIWindow 会污染整个继承链，
+// 所以先用 class_addMethod 给 UIWindow 装一份自己的实现。
+static void FMReplacementMotion(id self, SEL _cmd, UIEventSubtype motion, UIEvent *event) {
+    if(motion == UIEventSubtypeMotionShake && FMHiddenMode() && FMShakeEnabled()) {
+        id manager = FMSharedManager();
+        if(manager && !FMBool(manager, @"isOpen") && !FMObject(manager, @"settingsWindow") &&
+           !FMBoolIvar(manager, "_morphActive")) {
+            SEL toggle = NSSelectorFromString(@"toggle");
+            if([manager respondsToSelector:toggle]) {
+                ((void (*)(id, SEL))objc_msgSend)(manager, toggle);
+                if(FMHapticEnabled()) {
+                    UIImpactFeedbackGenerator *feedback =
+                        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+                    [feedback impactOccurred];
+                }
+                FMLog(@"hidden-bead-open", @{@"trigger": @"shake"});
+                return;   // 摇一摇已被我们消费，不往下传，避免连带触发系统的撤销提示
+            }
+        }
+    }
+    if(FMOriginalMotion) FMOriginalMotion(self, _cmd, motion, event);
+}
+
 static BOOL FMSwizzleInstance(Class cls, NSString *selectorName, IMP replacement, IMP *original) {
     if(!cls) return NO;
     SEL selector = NSSelectorFromString(selectorName);
     Method method = class_getInstanceMethod(cls, selector);
     if(!method) return NO;
     if(original) *original = method_getImplementation(method);
+    method_setImplementation(method, replacement);
+    return YES;
+}
+
+// 覆盖从父类继承来的方法（如 UIWindow 的 motionEnded:withEvent:）：
+// 在子类上新增一份实现，父类不受影响。
+static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement, IMP *original) {
+    if(!cls) return NO;
+    SEL selector = NSSelectorFromString(selectorName);
+    Method method = class_getInstanceMethod(cls, selector);
+    if(!method) return NO;
+    IMP inherited = method_getImplementation(method);
+    if(original) *original = inherited;
+    if(class_addMethod(cls, selector, replacement, method_getTypeEncoding(method))) return YES;
     method_setImplementation(method, replacement);
     return YES;
 }
@@ -262,6 +306,7 @@ static BOOL FMSwizzleInstance(Class cls, NSString *selectorName, IMP replacement
     ok &= FMSwizzleInstance(module, @"orbitWillStop", (IMP)FMReplacementStop, (IMP *)&FMOriginalStop);
     ok &= FMSwizzleInstance(manager, @"drawOrb", (IMP)FMReplacementDrawOrb, (IMP *)&FMOriginalDrawOrb);
     ok &= FMSwizzleInstance(manager, @"applyMorphProgress:", (IMP)FMReplacementMorphProgress, (IMP *)&FMOriginalMorphProgress);
+    ok &= FMSwizzleOverride(UIWindow.class, @"motionEnded:withEvent:", (IMP)FMReplacementMotion, (IMP *)&FMOriginalMotion);
     [FMPressCenter shared]->_hooksInstalled = ok;
 
     // 兜底：swizzle 全失败时，回到前台仍然尝试装一次。

@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v2"
+#define FM_MENU_VERSION @"1.0.36v3"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -7955,6 +7955,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
     [self add:[self handleCombinedRow] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"摇一摇呼出" key:@"shakeToOpen" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbDropletCurve",nil) to:rows group:group when:FMDockWhenDroplet];
     [self addSlider:FMDockOption(@"orbDropletExtend",nil) to:rows group:group when:FMDockWhenDroplet];
@@ -8061,14 +8062,40 @@ static UIView *FMDockCard(UIStackView *rows) {
 // Puts the rows of the open group that apply into their card, takes every other row out,
 // and turns the chevrons. Rows are added and removed rather than hidden: hiding the same
 // arranged subview twice leaves a stack view holding it at no height for good.
+// 隐藏微珠形态下，这些行作用在看不见的把手上，直接跳过不显示。
+static BOOL FMRowHiddenWithBead(UIView *row,FMDockGroup group) {
+    if(group!=FMDockGroupHandle) return NO;
+    if([row isKindOfClass:UILabel.class]) return YES;
+    static NSSet *keys=nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken,^{
+        keys=[NSSet setWithArray:@[@"orbHandleReach",@"orbHandleLength",@"orbCapsuleCorner",
+            @"orbSoftness",@"orbScale",@"orbGlowLength",@"orbGlowBrightness",
+            @"glowLine",@"redBreathingLight",@"blueBreathingLight",@"orbGlowColor"]];
+    });
+    NSString *key=nil;
+    if([row isKindOfClass:FMDockSlider.class]) key=((FMDockSlider *)row).option[@"key"];
+    else if([row isKindOfClass:FMDockSwitch.class]) key=((FMDockSwitch *)row).key;
+    else if([row isKindOfClass:FMDockSegments.class]) key=((FMDockSegments *)row).key;
+    return key!=nil && [keys containsObject:key];
+}
 - (void)applyVisibilityAnimated:(BOOL)animated {
     void (^apply)(void)=^{
         FMBeginPreferenceSnapshot();
+        // 隐藏微珠形态：回弹（位置）与透明度两组整卡收起，只留微珠组和展开栏组。
+        BOOL hiddenBead=FloatPref(@"orbHandleStyle",0)>=1.5;
+        if(hiddenBead && (self.openGroup==FMDockGroupPosition||self.openGroup==FMDockGroupOpacity)) self.openGroup=-1;
+        for(NSInteger groupIndex=0;groupIndex<(NSInteger)self.groupStacks.count;groupIndex++) {
+            UIView *card=self.groupStacks[groupIndex].superview;
+            card.hidden=hiddenBead && (groupIndex==FMDockGroupPosition||groupIndex==FMDockGroupOpacity);
+        }
         for(UIStackView *rows in self.groupStacks)
             while(rows.arrangedSubviews.count>1) [rows.arrangedSubviews.lastObject removeFromSuperview];
         for(NSDictionary *entry in self.bodyRows) {
             if([entry[@"group"] integerValue]!=self.openGroup) continue;
             if(![self whenHolds:(FMDockWhen)[entry[@"when"] integerValue]]) continue;
+            if(FloatPref(@"orbHandleStyle",0)>=1.5 &&
+               FMRowHiddenWithBead(entry[@"view"],(FMDockGroup)[entry[@"group"] integerValue])) continue;
             UIStackView *rows=entry[@"stack"];
             UIView *row=entry[@"view"];
             row.alpha=1;
