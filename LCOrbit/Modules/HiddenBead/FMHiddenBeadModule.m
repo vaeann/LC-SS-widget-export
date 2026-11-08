@@ -278,9 +278,9 @@ static void FMInstallInScene(UIWindowScene *scene) {
     NSMutableArray *skipped = [NSMutableArray array];
 
     for(UIWindow *window in scene.windows) {
-        if(window.hidden) { [skipped addObject:[NSString stringWithFormat:@"%@(hidden)", window.class]; continue; }
-        if(window.windowLevel >= UIWindowLevelAlert) { [skipped addObject:[NSString stringWithFormat:@"%@(alert)", window.class]; continue; }
-        if(FMIsOwnOverlayWindow(window)) { [skipped addObject:[NSString stringWithFormat:@"%@(overlay)", window.class]; continue; }
+        if(window.hidden) { [skipped addObject:[NSString stringWithFormat:@"%@(hidden)", window.class]]; continue; }
+        if(window.windowLevel >= UIWindowLevelAlert) { [skipped addObject:[NSString stringWithFormat:@"%@(alert)", window.class]]; continue; }
+        if(FMIsOwnOverlayWindow(window)) { [skipped addObject:[NSString stringWithFormat:@"%@(overlay)", window.class]]; continue; }
 
         UILongPressGestureRecognizer *press = objc_getAssociatedObject(window, &kFMPressGestureKey);
         if(wantPress && !press) {
@@ -654,6 +654,13 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
 #pragma mark - 加载入口
 
 @implementation FMSummonCenter
+
++ (instancetype)shared {
+    static FMSummonCenter *center;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ center = [FMSummonCenter new]; });
+    return center;
+}
 
 - (void)handlePress:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state != UIGestureRecognizerStateBegan) return;
