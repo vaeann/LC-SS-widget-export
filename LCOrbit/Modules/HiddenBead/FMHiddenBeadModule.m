@@ -32,10 +32,12 @@ static NSString *const kFMModuleName = @"LCFloatingMenu";
 
 // 偏好键。
 //   beadHidden          YES = 隐藏微珠（对应旧版 orbHandleStyle=2，启动时迁移）
-//   beadSummonGesture   0 长按空白（默认）/ 1 双击空白
+//   beadSummonStyle     0 原微珠位置点击（默认）/ 1 长按空白 / 2 双击空白
+//                       （旧键 beadSummonGesture：0 长按 / 1 双击，启动时 +1 平移迁移）
 //   shakeToggleBead     摇一摇显隐微珠，默认关
 static NSString *const kKeyHidden = @"beadHidden";
-static NSString *const kKeySummon = @"beadSummonGesture";
+static NSString *const kKeySummon = @"beadSummonStyle";
+static NSString *const kKeySummonLegacy = @"beadSummonGesture";
 static NSString *const kKeyShake = @"shakeToggleBead";
 
 // 长按判定。按压时间短了会和 App 自己的长按打架，长了手感拖沓；
@@ -91,6 +93,16 @@ static void FMMigrateLegacy(void) {
         FMSetPref(@"orbDropletPull", @NO);
         FMLog(@"bead-hidden-migrated", @{@"from": @"orbHandleStyle=2"});
     }
+    // 呼出方式旧键（0 长按 / 1 双击）平移到新键（1 长按 / 2 双击），
+    // 新键 0 = 原微珠位置点击。没旧值的用户保持默认 0。
+    NSNumber *legacy = FMPref(kKeySummonLegacy);
+    if(legacy) {
+        NSInteger shifted = [legacy integerValue] + 1;
+        if(shifted < 0 || shifted > 2) shifted = 0;
+        FMSetPref(kKeySummon, @(shifted));
+        FMSetPref(kKeySummonLegacy, nil);
+        FMLog(@"bead-summon-migrated", @{@"legacy": legacy, @"now": @(shifted)});
+    }
     FMSetPref(@"beadHiddenMigrated", @YES);
 }
 
@@ -98,12 +110,11 @@ static BOOL FMHiddenMode(void) {
     return [FMPref(kKeyHidden) boolValue];
 }
 
-// 呼出方式：0 长按空白 / 1 双击空白。（历史上短暂出现过 2=左胶囊按钮，
-// 读到旧值一律降级为默认的长按空白。）
+// 呼出方式：0 原微珠位置点击（默认）/ 1 长按空白 / 2 双击空白。
 static NSInteger FMSummonStyle(void) {
     id value = FMPref(kKeySummon);
     NSInteger style = value ? [value integerValue] : 0;
-    if(style != 1) style = 0;
+    if(style < 0 || style > 2) style = 0;
     return style;
 }
 
@@ -272,8 +283,9 @@ static void FMInstallInScene(UIWindowScene *scene) {
     if(!scene) return;
     FMSummonCenter *center = [FMSummonCenter shared];
     NSInteger style = FMSummonStyle();
-    BOOL wantPress = style == 0;
-    BOOL wantDouble = style == 1;
+    // 0 原微珠位置点击 = 热区方案，不需要 recognizer。
+    BOOL wantPress = style == 1;
+    BOOL wantDouble = style == 2;
     NSInteger installed = 0;
     NSMutableArray *skipped = [NSMutableArray array];
 
@@ -362,7 +374,57 @@ static void FMRemoveAllGestures(void) {
     }
 }
 
-// 同步微珠显隐 + 手势装拆。偏好变化、上游重绘、生命周期事件后调用。
+#pragma mark - 原微珠位置热区（呼出方式 0）
+
+// 微珠隐藏后，在它原来的位置放一块透明点击区：单击呼出侧栏。
+// 相比全屏手势的优势：零竞争（就是一枚按钮）、只占微珠大小的区域不挡
+// App、挂在微珠父视图上——微珠在哪个进程显示，热区就在哪个进程收点击
+// （复刻上游"点微珠呼出"的交互路径，这条路是验证过可靠的）。
+static char kFMHotZoneKey;
+
+@interface FMBeadHotZone : UIButton
+- (void)tapped;
+@end
+
+@implementation FMBeadHotZone
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if(self) {
+        self.backgroundColor = UIColor.clearColor;
+        self.accessibilityLabel = @"呼出侧栏";
+        [self addTarget:self action:@selector(tapped) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return self;
+}
+- (void)tapped {
+    FMOpenPanel(@"bead-zone");
+}
+@end
+
+// 把热区同步到微珠当前位置。drawOrb 每次绘制都会走到这里，
+// 上游移动/吸附微珠时热区跟着走。
+static void FMSyncHotZone(UIView *orb) {
+    if(![orb isKindOfClass:UIView.class]) return;
+    FMBeadHotZone *zone = objc_getAssociatedObject(orb, &kFMHotZoneKey);
+    BOOL want = FMHiddenMode() && FMSummonStyle() == 0;
+    if(want) {
+        if(!zone) {
+            zone = [[FMBeadHotZone alloc] initWithFrame:orb.frame];
+            objc_setAssociatedObject(orb, &kFMHotZoneKey, zone, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        // 微珠换了父视图（重挂场景）时补挂。
+        if(zone.superview != orb.superview && orb.superview) {
+            [zone removeFromSuperview];
+            [orb.superview addSubview:zone];
+        }
+        zone.frame = orb.frame;
+        zone.hidden = orb.hidden ? NO : YES;   // 微珠隐藏时热区才可点
+    } else if(zone) {
+        zone.hidden = YES;
+    }
+}
+
+// 同步微珠显隐 + 热区 + 手势装拆。偏好变化、上游重绘、生命周期事件后调用。
 static void FMSyncUI(void) {
     id manager = FMSharedManager();
     UIView *orb = FMIvar(manager, "_orb");
@@ -372,6 +434,7 @@ static void FMSyncUI(void) {
         BOOL hidden = FMHiddenMode();
         orb.hidden = hidden;
         orb.userInteractionEnabled = hidden ? NO : !FMBool(manager, @"isOpen");
+        FMSyncHotZone(orb);
     }
     FMInstallEverywhere();
 }
@@ -501,7 +564,7 @@ static void FMSyncUI(void) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if(section == 0) return @"隐藏后不再显示吸附的微珠，用下面的手势呼出侧栏。";
-    if(section == 1) return @"微珠隐藏时生效：长按或双击页面的空白区域呼出侧栏。";
+    if(section == 1) return @"原微珠位置：点击微珠隐藏前所在的同一位置呼出（推荐，不干扰 App 操作）。长按/双击空白：在页面空白处手势呼出。";
     return @"摇一摇手机在「显示微珠」和「隐藏微珠」之间切换。";
 }
 
@@ -527,7 +590,7 @@ static void FMSyncUI(void) {
     } else if(indexPath.section == 1) {
         cell.textLabel.text = @"呼出侧栏";
         if(!_summonSegment) {
-            _summonSegment = [[UISegmentedControl alloc] initWithItems:@[@"长按空白", @"双击空白"]];
+            _summonSegment = [[UISegmentedControl alloc] initWithItems:@[@"原微珠位置", @"长按空白", @"双击空白"]];
             _summonSegment.selectedSegmentIndex = FMSummonStyle();
             _summonSegment.apportionsSegmentWidthsByContent = YES;
             [_summonSegment addTarget:self action:@selector(summonChanged:)
