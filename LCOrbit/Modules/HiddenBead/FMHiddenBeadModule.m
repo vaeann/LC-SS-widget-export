@@ -1,22 +1,26 @@
-// FMHiddenBeadModule — 微珠显隐：隐藏微珠 + 两种呼出手势 + 摇一摇显隐
+// FMHiddenBeadModule — 微珠显隐：隐藏微珠（含横屏自动隐藏）+ 原微珠位置点击呼出 + 摇一摇显隐
 //
 // 功能（全部通过运行时接入，不改上游业务逻辑）：
-//   * beadHidden        隐藏吸附在屏幕边缘的微珠（把手）；
-//   * beadSummonGesture 微珠隐藏后的呼出方式：
-//                         0 长按空白（默认）/ 1 双击空白；
-//   * shakeToggleBead   摇一摇在「显示微珠」和「隐藏微珠」之间切换。
+//   * beadHidden         YES = 隐藏吸附在屏幕边缘的微珠（把手）；
+//   * beadHideLandscape  YES = 横屏时自动隐藏微珠、竖屏恢复（需上游「左横屏自适应」开启，
+//                        模块侧自动补开）；beadHidden 优先，不受方向影响；
+//   * shakeToggleBead    摇一摇在「显示微珠」和「隐藏微珠」之间切换。
+//
+// 呼出方式：点击微珠隐藏前所在的同一位置（透明热区挂在微珠父视图上）。
+// 早期版本做过长按空白 / 双击空白 / 钩住 UIApplication 收事件 三种全屏手势，均因多任务
+// 模式下 Guest 进程的触摸派发路径（BackBoard 按 CAContext 路由、FBScene 转发不经
+// UIApplication 的收事件入口）与 App 自身手势竞争而不可靠，已全部移除。
 //
 // 设置入口：设置页 → 显示方式 → 微珠显隐（入口行由本模块导出的
 // FMBeadVisibilityRow() 生成，子页是本模块自己的 ViewController）。
 //
-// 接入点（七个 swizzle，都是"先调原实现，再补一句"）：
+// 接入点（六个 swizzle，都是"先调原实现，再补一句"）：
 //   -[LCFloatingMenuModule orbitDidStartWithContext:]              模块启动 → 迁移 + 同步
 //   -[LCFloatingMenuModule orbitDidReceiveLifecycleEvent:scene:]   前后台/场景切换 → 同步
-//   -[LCFloatingMenuModule orbitWillStop]                          模块停止 → 取消计时
+//   -[LCFloatingMenuModule orbitWillStop]                          模块停止
 //   -[FMManager drawOrb]                                           画完把手 → 按开关隐藏
 //   -[FMManager applyMorphProgress:]                               形变每帧 → 低进度淡出面板
 //   -[UIWindow motionEnded:withEvent:]                             摇一摇
-//   window 级 UILongPress/UIScreenEdge  recognizer                    呼出手势（长按/双击空白）
 //
 // 上游改了下列符号名，本模块会安静失效（不崩溃），并记一条 gesture-hook-missing。
 
@@ -31,19 +35,14 @@
 static NSString *const kFMModuleName = @"LCFloatingMenu";
 
 // 偏好键。
-//   beadHidden          YES = 隐藏微珠（对应旧版 orbHandleStyle=2，启动时迁移）
-//   beadSummonStyle     0 原微珠位置点击（默认）/ 1 长按空白 / 2 双击空白
-//                       （旧键 beadSummonGesture：0 长按 / 1 双击，启动时 +1 平移迁移）
-//   shakeToggleBead     摇一摇显隐微珠，默认关
+//   beadHidden         YES = 隐藏微珠（对应旧版 orbHandleStyle=2，启动时迁移）
+//   beadHideLandscape  YES = 横屏时自动隐藏微珠、竖屏恢复（beadHidden 优先）
+//   shakeToggleBead    摇一摇显隐微珠，默认关
 static NSString *const kKeyHidden = @"beadHidden";
-static NSString *const kKeySummon = @"beadSummonStyle";
-static NSString *const kKeySummonLegacy = @"beadSummonGesture";
+static NSString *const kKeyHideLandscape = @"beadHideLandscape";
 static NSString *const kKeyShake = @"shakeToggleBead";
 
-// 长按判定。按压时间短了会和 App 自己的长按打架，长了手感拖沓；
-// allowableMovement 给到手抖余量——12pt 在真实握持下太容易超，超了手势直接失败。
-static const CGFloat kFMPressDuration = 0.40;
-static const CGFloat kFMPressMovement = 28.0;
+// 形变进度低于此范围时把面板整体淡出，避开收合末尾插值出的把手轮廓。
 static const CGFloat kFMFadeFloor = 0.02;
 static const CGFloat kFMFadeSpan = 0.16;
 
@@ -93,29 +92,30 @@ static void FMMigrateLegacy(void) {
         FMSetPref(@"orbDropletPull", @NO);
         FMLog(@"bead-hidden-migrated", @{@"from": @"orbHandleStyle=2"});
     }
-    // 呼出方式旧键（0 长按 / 1 双击）平移到新键（1 长按 / 2 双击），
-    // 新键 0 = 原微珠位置点击。没旧值的用户保持默认 0。
-    NSNumber *legacy = FMPref(kKeySummonLegacy);
-    if(legacy) {
-        NSInteger shifted = [legacy integerValue] + 1;
-        if(shifted < 0 || shifted > 2) shifted = 0;
-        FMSetPref(kKeySummon, @(shifted));
-        FMSetPref(kKeySummonLegacy, nil);
-        FMLog(@"bead-summon-migrated", @{@"legacy": legacy, @"now": @(shifted)});
-    }
     FMSetPref(@"beadHiddenMigrated", @YES);
 }
 
+// 用户显式隐藏（设置页开关 / 摇一摇切的结果）。
 static BOOL FMHiddenMode(void) {
     return [FMPref(kKeyHidden) boolValue];
 }
 
-// 呼出方式：0 原微珠位置点击（默认）/ 1 长按空白 / 2 双击空白。
-static NSInteger FMSummonStyle(void) {
-    id value = FMPref(kKeySummon);
-    NSInteger style = value ? [value integerValue] : 0;
-    if(style < 0 || style > 2) style = 0;
-    return style;
+// 界面是否横屏。用 overlay 窗口自身的 bounds 判断——它跟随设备旋转，
+// 比 UIDevice.orientation 稳（后者在平放、锁屏等场景会给出无关值）。
+static BOOL FMIsLandscape(UIView *orb) {
+    UIWindow *window = orb.window;
+    if(!window) return NO;
+    CGSize size = window.bounds.size;
+    if(size.width <= 0 || size.height <= 0) return NO;
+    return size.width > size.height;
+}
+
+// 实际显隐状态 = 用户显式隐藏 ||（横屏隐藏开启 && 当前横屏）。
+// 显式隐藏优先：用户明确隐藏后，竖屏也保持隐藏，不受横屏开关影响。
+static BOOL FMHiddenEffective(UIView *orb) {
+    if([FMPref(kKeyHidden) boolValue]) return YES;
+    if(![FMPref(kKeyHideLandscape) boolValue]) return NO;
+    return FMIsLandscape(orb);
 }
 
 static BOOL FMShakeToggle(void) {
@@ -202,178 +202,6 @@ static void FMOpenPanel(NSString *trigger) {
     FMLog(@"hidden-bead-open", trigger ? @{@"trigger": trigger} : nil);
 }
 
-#pragma mark - 空白判定
-
-// "空白页面"的判定标准：触摸点不能落在任何可交互控件、文本输入、
-// 列表单元格或网页视图上。命中这些就交给 App 自己处理，我们不抢。
-// 注意：只排除具体的内容视图，不排除 UITableView/UICollectionView 这类
-// 容器——容器本身的空白区域（cell 之外的滚动区）也算空白。
-static BOOL FMTouchIsBlank(UITouch *touch) {
-    UIView *view = touch.view;
-    if(!view) return YES;   // 触摸没落在任何视图上，就是 window 背景，算空白。
-    for(UIView *current = view; current; current = current.superview) {
-        if([current isKindOfClass:UIControl.class]) return NO;
-        if([current isKindOfClass:UITextView.class]) return NO;
-        if([current isKindOfClass:UITextField.class]) return NO;
-        if([current isKindOfClass:NSClassFromString(@"UITableViewCell")]) return NO;
-        if([current isKindOfClass:NSClassFromString(@"UICollectionViewCell")]) return NO;
-        if([current isKindOfClass:NSClassFromString(@"UITableViewHeaderFooterView")]) return NO;
-        if([current isKindOfClass:NSClassFromString(@"WKWebView")]) return NO;
-    }
-    return YES;
-}
-
-// not-blank 时记录从触摸点向上的视图链（前 8 层）+ 第一个黑名单类。
-// App 内容层级深，整条链能直接看出是谁在拦。
-static NSString *FMTouchBlockerName(UITouch *touch) {
-    UIView *view = touch.view;
-    if(!view) return @"nil-view";
-    NSMutableArray *chain = [NSMutableArray array];
-    NSString *blocker = nil;
-    int depth = 0;
-    for(UIView *current = view; current && depth < 8; current = current.superview, depth++) {
-        [chain addObject:NSStringFromClass(current.class)];
-        if(blocker) continue;
-        if([current isKindOfClass:UIControl.class]) blocker = NSStringFromClass(current.class);
-        else if([current isKindOfClass:UITextView.class]) blocker = @"UITextView";
-        else if([current isKindOfClass:UITextField.class]) blocker = @"UITextField";
-        else if([current isKindOfClass:NSClassFromString(@"UITableViewCell")]) blocker = @"UITableViewCell";
-        else if([current isKindOfClass:NSClassFromString(@"UICollectionViewCell")]) blocker = @"UICollectionViewCell";
-        else if([current isKindOfClass:NSClassFromString(@"UITableViewHeaderFooterView")]) blocker = @"HeaderFooterView";
-        else if([current isKindOfClass:NSClassFromString(@"WKWebView")]) blocker = @"WKWebView";
-    }
-    NSString *path = [chain componentsJoinedByString:@" < "];
-    return blocker ? [NSString stringWithFormat:@"%@  ||链: %@", blocker, path] : path;
-}
-
-#pragma mark - 呼出手势（recognizer 级）
-
-// 方案演变（三次失败换来的教训，改动前先读）：
-//   v9   recognizer + simultaneous=YES：LC 宿主有效；Guest App 内被 App 自己的
-//        手势（scrollview pan 等）挤掉——App 的 pan 一旦 Began 会"没收"触摸，
-//        window 级 longPress 永远不触发。
-//   v11-v15  swizzle UIWindow/UIApplication.sendEvent:：宿主有效；但 Guest 进程内
-//        的触摸不经 window.sendEvent（LC 多任务容器派发），Guest 侧零事件。
-//   v16  回到 recognizer，竞争策略改为 shouldRequireFailureOfGestureRecognizer：
-//        App 的手势必须等我们的长按失败（移动超限或松手即失败）。长按不动 0.4s
-//        我们触发呼出；用户想滚动时长按立即失败、App 滚动继续。双击与 App 手势
-//        并行（双击快、且只收空白处触摸，不延迟 App 点击）。
-//        竞争处理参考 LiveContainer-zh 的 TweakLoader 边缘手势实现。
-
-static char kFMPressGestureKey;
-static char kFMDoubleGestureKey;
-
-// recognizer 的 target 与 delegate。单例，所有窗口共用。
-@interface FMSummonCenter : NSObject <UIGestureRecognizerDelegate>
-+ (instancetype)shared;
-- (void)handlePress:(UILongPressGestureRecognizer *)gesture;
-- (void)handleDoubleTap:(UITapGestureRecognizer *)gesture;
-@end
-
-static BOOL FMIsOwnOverlayWindow(UIWindow *window) {
-    // Overlay 是 LCOrbitPassThroughWindow，挂在 Normal+75；它的触摸不会到这里。
-    return [NSStringFromClass(window.class) isEqualToString:@"LCOrbitPassThroughWindow"];
-}
-
-static void FMSyncUI(void);
-
-// 每个前台普通 window 按呼出方式装/拆 recognizer。手势始终生效（不依赖微珠
-// 显隐，v14 起解除绑定）；切换方式时旧的会被拆掉，不重复、不残留。
-static void FMInstallInScene(UIWindowScene *scene) {
-    if(!scene) return;
-    FMSummonCenter *center = [FMSummonCenter shared];
-    NSInteger style = FMSummonStyle();
-    // 0 原微珠位置点击 = 热区方案，不需要 recognizer。
-    BOOL wantPress = style == 1;
-    BOOL wantDouble = style == 2;
-    NSInteger installed = 0;
-    NSMutableArray *skipped = [NSMutableArray array];
-
-    for(UIWindow *window in scene.windows) {
-        if(window.hidden) { [skipped addObject:[NSString stringWithFormat:@"%@(hidden)", window.class]]; continue; }
-        if(window.windowLevel >= UIWindowLevelAlert) { [skipped addObject:[NSString stringWithFormat:@"%@(alert)", window.class]]; continue; }
-        if(FMIsOwnOverlayWindow(window)) { [skipped addObject:[NSString stringWithFormat:@"%@(overlay)", window.class]]; continue; }
-
-        UILongPressGestureRecognizer *press = objc_getAssociatedObject(window, &kFMPressGestureKey);
-        if(wantPress && !press) {
-            press = [[UILongPressGestureRecognizer alloc] initWithTarget:center
-                                                                  action:@selector(handlePress:)];
-            press.minimumPressDuration = kFMPressDuration;
-            press.allowableMovement = kFMPressMovement;
-            press.numberOfTouchesRequired = 1;
-            // 不吞触摸：App 自己的点击、滚动都照常工作。
-            press.cancelsTouchesInView = NO;
-            press.delaysTouchesEnded = NO;
-            press.delegate = center;
-            [window addGestureRecognizer:press];
-            objc_setAssociatedObject(window, &kFMPressGestureKey, press, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        } else if(!wantPress && press) {
-            [window removeGestureRecognizer:press];
-            objc_setAssociatedObject(window, &kFMPressGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-
-        UITapGestureRecognizer *doubleTap = objc_getAssociatedObject(window, &kFMDoubleGestureKey);
-        if(wantDouble && !doubleTap) {
-            doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:center
-                                                                action:@selector(handleDoubleTap:)];
-            doubleTap.numberOfTapsRequired = 2;
-            doubleTap.numberOfTouchesRequired = 1;
-            doubleTap.cancelsTouchesInView = NO;
-            doubleTap.delaysTouchesEnded = NO;
-            doubleTap.delegate = center;
-            [window addGestureRecognizer:doubleTap];
-            objc_setAssociatedObject(window, &kFMDoubleGestureKey, doubleTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        } else if(!wantDouble && doubleTap) {
-            [window removeGestureRecognizer:doubleTap];
-            objc_setAssociatedObject(window, &kFMDoubleGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-
-        if((wantPress && press) || (wantDouble && doubleTap)) installed++;
-    }
-
-    // 安装诊断：窗口清单 + 实际装上的数量。宿主正常、Guest 失效时，
-    // 这条能直接看出是没遍历到窗口、还是窗口被跳过条件滤掉。
-    static NSInteger FMLastInstalledCount = -1;
-    static NSTimeInterval FMLastInstallLog = 0;
-    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
-    if(installed != FMLastInstalledCount || now - FMLastInstallLog > 30.0) {
-        FMLastInstalledCount = installed;
-        FMLastInstallLog = now;
-        FMLog(@"gesture-install", @{@"style": @(style),
-                                    @"installed": @(installed),
-                                    @"skipped": skipped,
-                                    @"sceneState": @(scene.activationState)});
-    }
-}
-
-// 遍历所有前台场景安装。每个触发点都全量刷：Guest 的主窗口创建得晚，
-// 任何单一时机都可能只看到部分窗口。
-static void FMInstallEverywhere(void) {
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        UISceneActivationState state = scene.activationState;
-        if(state != UISceneActivationStateForegroundActive &&
-           state != UISceneActivationStateForegroundInactive) continue;
-        FMInstallInScene((UIWindowScene *)scene);
-    }
-}
-
-static void FMRemoveAllGestures(void) {
-    char *gestureKeys[2] = {&kFMPressGestureKey, &kFMDoubleGestureKey};
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        for(UIWindow *window in ((UIWindowScene *)scene).windows) {
-            for(int index = 0; index < 2; index++) {
-                char *key = gestureKeys[index];
-                UIGestureRecognizer *gesture = objc_getAssociatedObject(window, key);
-                if(!gesture) continue;
-                [window removeGestureRecognizer:gesture];
-                objc_setAssociatedObject(window, key, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
-        }
-    }
-}
-
 #pragma mark - 原微珠位置热区（呼出方式 0）
 
 // 微珠隐藏后，在它原来的位置放一块透明点击区：单击呼出侧栏。
@@ -406,7 +234,7 @@ static char kFMHotZoneKey;
 static void FMSyncHotZone(UIView *orb) {
     if(![orb isKindOfClass:UIView.class]) return;
     FMBeadHotZone *zone = objc_getAssociatedObject(orb, &kFMHotZoneKey);
-    BOOL want = FMHiddenMode() && FMSummonStyle() == 0;
+    BOOL want = FMHiddenEffective(orb);
 
     // 孤儿清理：上游切换场景/重挂时会销毁并重建微珠，关联在旧微珠上的
     // 热区会残留在 overlayView 上变成"幽灵点击区"。每次同步都把不属于
@@ -432,19 +260,26 @@ static void FMSyncHotZone(UIView *orb) {
     }
 }
 
-// 同步微珠显隐 + 热区 + 手势装拆。偏好变化、上游重绘、生命周期事件后调用。
+// 同步微珠显隐 + 热区。偏好变化、上游重绘、方向变化、生命周期事件后调用。
 static void FMSyncUI(void) {
+    // 横屏隐藏依赖上游「左横屏自适应」开启：关掉它就等于锁竖屏，横屏隐藏永不触发。
+    // 用户开了本功能说明就是想用横屏，自动把前提补开，不用回上游设置里翻。
+    if([FMPref(kKeyHideLandscape) boolValue] &&
+       ![[LCOrbitStorage objectForKey:@"unlockOrientation" module:kFMModuleName] boolValue]) {
+        FMSetPref(@"unlockOrientation", @YES);
+        FMLog(@"bead-landscape-unlock-linked", nil);
+    }
+
     id manager = FMSharedManager();
     UIView *orb = FMIvar(manager, "_orb");
     if([orb isKindOfClass:UIView.class]) {
         // 上游点亮把手的地方写的都是 alpha，没有人碰 hidden，
         // 所以这里压一次 hidden 就够，不必逐个 swizzle 那些 alpha 写入点。
-        BOOL hidden = FMHiddenMode();
+        BOOL hidden = FMHiddenEffective(orb);
         orb.hidden = hidden;
         orb.userInteractionEnabled = hidden ? NO : !FMBool(manager, @"isOpen");
         FMSyncHotZone(orb);
     }
-    FMInstallEverywhere();
 }
 
 
@@ -546,10 +381,9 @@ static void FMSyncUI(void) {
 }
 @end
 
-// 子页：三行设置（接口声明见上方）。
+// 子页：两行设置（接口声明见上方）。
 @implementation FMBeadVisibilityController {
     UISwitch *_hiddenSwitch;
-    UISegmentedControl *_summonSegment;
     UISwitch *_shakeSwitch;
 }
 
@@ -564,15 +398,14 @@ static void FMSyncUI(void) {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     return 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if(section == 0) return @"隐藏后不再显示吸附的微珠，用下面的手势呼出侧栏。";
-    if(section == 1) return @"原微珠位置：点击微珠隐藏前所在的同一位置呼出（推荐，不干扰 App 操作）。长按/双击空白：在页面空白处手势呼出。";
+    if(section == 0) return @"隐藏后不再显示吸附的微珠；点击微珠原来所在的位置即可呼出侧栏。横屏自动隐藏见「屏幕与旋转」分组。";
     return @"摇一摇手机在「显示微珠」和「隐藏微珠」之间切换。";
 }
 
@@ -595,16 +428,6 @@ static void FMSyncUI(void) {
                     forControlEvents:UIControlEventValueChanged];
         }
         cell.accessoryView = _hiddenSwitch;
-    } else if(indexPath.section == 1) {
-        cell.textLabel.text = @"呼出侧栏";
-        if(!_summonSegment) {
-            _summonSegment = [[UISegmentedControl alloc] initWithItems:@[@"原微珠位置", @"长按空白", @"双击空白"]];
-            _summonSegment.selectedSegmentIndex = FMSummonStyle();
-            _summonSegment.apportionsSegmentWidthsByContent = YES;
-            [_summonSegment addTarget:self action:@selector(summonChanged:)
-                     forControlEvents:UIControlEventValueChanged];
-        }
-        cell.accessoryView = _summonSegment;
     } else {
         cell.textLabel.text = @"摇一摇显隐微珠";
         if(!_shakeSwitch) {
@@ -623,12 +446,6 @@ static void FMSyncUI(void) {
     FMSyncUI();
     FMHapticLight();
     FMLog(@"bead-hidden-changed", @{@"on": @(sender.on)});
-}
-
-- (void)summonChanged:(UISegmentedControl *)sender {
-    FMSetPref(kKeySummon, @(sender.selectedSegmentIndex));
-    FMSyncUI();
-    FMLog(@"bead-summon-changed", @{@"style": @(sender.selectedSegmentIndex)});
 }
 
 - (void)shakeChanged:(UISwitch *)sender {
@@ -653,7 +470,8 @@ static void FMReplacementStart(id self, SEL _cmd, id context) {
     dispatch_async(dispatch_get_main_queue(), ^{
         FMMigrateLegacy();
         FMSyncUI();
-        if(FMHiddenMode()) FMLog(@"hidden-bead-active", @{@"summon": @(FMSummonStyle())});
+        if(FMHiddenEffective(FMIvar(FMSharedManager(), @"_orb")))
+            FMLog(@"hidden-bead-active", @{@"hidden": @YES});
     });
 }
 
@@ -666,7 +484,6 @@ static void FMReplacementLifecycle(id self, SEL _cmd, NSString *event, UIWindowS
 
 static void FMReplacementStop(id self, SEL _cmd) {
     if(FMOriginalStop) FMOriginalStop(self, _cmd);
-    FMRemoveAllGestures();
 }
 
 static void FMReplacementDrawOrb(id self, SEL _cmd) {
@@ -676,7 +493,8 @@ static void FMReplacementDrawOrb(id self, SEL _cmd) {
 
 static void FMReplacementMorphProgress(id self, SEL _cmd, CGFloat progress) {
     if(FMOriginalMorphProgress) FMOriginalMorphProgress(self, _cmd, progress);
-    if(!FMHiddenMode()) return;
+    UIView *orb = FMIvar(self, @"_orb");
+    if(![orb isKindOfClass:UIView.class] || !FMHiddenEffective(orb)) return;
     UIView *panel = FMObject(self, @"panel");
     if(![panel isKindOfClass:UIView.class]) return;
     // 形变在进度接近 0 时会把面板插值成把手的轮廓；把手不可见时那一帧只剩一团
@@ -688,7 +506,11 @@ static void FMReplacementMorphProgress(id self, SEL _cmd, CGFloat progress) {
 // 所以先用 class_addMethod 给 UIWindow 装一份自己的实现。
 static void FMReplacementMotion(id self, SEL _cmd, UIEventSubtype motion, UIEvent *event) {
     if(motion == UIEventSubtypeMotionShake && FMShakeToggle() && !FMManagerBusy()) {
-        BOOL next = !FMHiddenMode();
+        // 按当前实际显隐状态取反（横屏态下实际=隐藏，摇一下即固化隐藏），
+        // 避免"摇了但看起来没反应"。
+        UIView *orb = FMIvar(self, @"_orb");
+        BOOL next = ![orb isKindOfClass:UIView.class] ? !FMHiddenMode()
+                                                      : !FMHiddenEffective(orb);
         FMSetPref(kKeyHidden, @(next));
         FMSyncUI();
         FMHapticLight();
@@ -724,6 +546,12 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
 
 #pragma mark - 加载入口
 
+// 单例容器：早期版本是 recognizer 的 target/delegate，手势方案移除后
+// 只作为模块的加载入口（+load 挂在它上面）保留。
+@interface FMSummonCenter : NSObject
++ (instancetype)shared;
+@end
+
 @implementation FMSummonCenter
 
 + (instancetype)shared {
@@ -731,46 +559,6 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
     static dispatch_once_t once;
     dispatch_once(&once, ^{ center = [FMSummonCenter new]; });
     return center;
-}
-
-- (void)handlePress:(UILongPressGestureRecognizer *)gesture {
-    if(gesture.state != UIGestureRecognizerStateBegan) return;
-    FMLog(@"gesture-fired", @{@"type": @"long-press"});
-    FMOpenPanel(@"long-press");
-}
-
-- (void)handleDoubleTap:(UITapGestureRecognizer *)gesture {
-    if(gesture.state != UIGestureRecognizerStateEnded) return;
-    FMLog(@"gesture-fired", @{@"type": @"double-tap"});
-    FMOpenPanel(@"double-tap");
-}
-
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-    return YES;
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
-    shouldReceiveTouch:(UITouch *)touch {
-    BOOL blank = FMTouchIsBlank(touch);
-    if(!blank)
-        FMLog(@"gesture-not-blank", @{@"path": FMTouchBlockerName(touch) ?: @"unknown"});
-    return blank;
-}
-
-// 竞争策略核心（参考 LiveContainer-zh TweakLoader）：长按 recognizer 要求
-// App 的手势等它失败——用户按住不动 0.4s 我们触发；用户移动（滚动）时长按
-// 立即失败，App 的手势接着识别。没有这条，App 的 pan Began 后会"没收"触摸，
-// 我们的长按永远不触发（v9 在 Guest 内失效的根因）。
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
-    shouldRequireFailureOfGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return [gestureRecognizer isKindOfClass:UILongPressGestureRecognizer.class];
-}
-
-// 双击与 App 手势并行（双击判定快，且只收空白处触摸，不延迟 App 点击）；
-// 长按走上面的 failure 要求，不同步。
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
-    shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
-    return ![gestureRecognizer isKindOfClass:UILongPressGestureRecognizer.class];
 }
 
 + (void)load {
@@ -788,8 +576,12 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
     ok &= FMSwizzleInstance(manager, @"applyMorphProgress:", (IMP)FMReplacementMorphProgress, (IMP *)&FMOriginalMorphProgress);
     ok &= FMSwizzleOverride(UIWindow.class, @"motionEnded:withEvent:", (IMP)FMReplacementMotion, (IMP *)&FMOriginalMotion);
 
-    // 手势安装兜底：Guest 的主窗口经常在模块启动之后才创建，新窗口出现和
-    // 回到前台时都全量刷一次，不漏掉晚到的窗口。
+    // 同步兜底，三条线：
+    //   1) 回到前台 / 新窗口可见——Guest 的主窗口常在模块启动之后才创建，
+    //      只依赖启动时机会漏掉晚到的窗口；
+    //   2) overlay 布局变化（LCOrbitOverlayViewController 在方向转场时发）——
+    //      横屏隐藏要靠它重算：转场完成后 overlay 的 bounds 已是新方向，
+    //      此时同步一次，微珠显隐和热区位置都跟上。
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue
@@ -797,6 +589,12 @@ static BOOL FMSwizzleOverride(Class cls, NSString *selectorName, IMP replacement
         FMSyncUI();
     }];
     [NSNotificationCenter.defaultCenter addObserverForName:UIWindowDidBecomeVisibleNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                 usingBlock:^(NSNotification *note) {
+        FMSyncUI();
+    }];
+    [NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitOverlayLayoutDidChangeNotification"
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue
                                                  usingBlock:^(NSNotification *note) {

@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v19"
+#define FM_MENU_VERSION @"1.0.36v20"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4737,8 +4737,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *sw1=[self switchRowWithTitle:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
         UIView *sw2=[self switchRowWithTitle:@"锁定禁右横屏" key:@"lockBanRightLandscape" defaultValue:YES tag:24];
         UIView *sw3=[self switchRowWithTitle:@"保持屏幕常亮" key:@"keepScreenAwake" defaultValue:NO tag:23];
-        UIView *rotCard=FMCreateGroupedCard(@[sw1,sw2,sw3],16);
+        // 横屏隐藏微珠：横屏时自动隐藏、竖屏恢复；依赖「左横屏自适应」，
+        // 模块侧在开启本项时自动补开它（见 FMHiddenBeadModule 的联动）。
+        UIView *sw8=[self switchRowWithTitle:@"横屏隐藏微珠" key:@"beadHideLandscape" defaultValue:NO tag:30];
+        UIView *rotCard=FMCreateGroupedCard(@[sw1,sw2,sw3,sw8],16);
         if(rotCard) [s addArrangedSubview:rotCard];
+        [self note:@"横屏时自动隐藏微珠、竖屏恢复；需「左横屏自适应」开启（开启本项时会自动打开它）。已开启「微珠显隐」里的隐藏时不受方向影响。" in:s];
         [self note:@"LiveContainer 右横屏有 BUG，默认禁止向右横屏，按需启用。" in:s];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
