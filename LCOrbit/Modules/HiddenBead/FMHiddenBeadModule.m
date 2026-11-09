@@ -67,6 +67,30 @@ static UIColor *FMGroupedBackground(BOOL secondary) {
     }];
 }
 
+// 与上游 FMThemeColor(FMColorText/FMColorSecondary) 完全对齐的配色：
+//   文字   深色 #F3F7FF / 浅色 #182638
+//   次要   深色 #C3CEDE / 浅色 #4B5B6C
+// 外观偏好 appearanceMode：0 跟随系统 / 1 浅色 / 2 深色（与上游同键同语义）。
+// 跟随系统时返回动态色，交给 trait 解析；强制模式返回固定色。
+static UIColor *FMBeadThemeColor(BOOL secondary) {
+    NSInteger mode = [[LCOrbitStorage objectForKey:@"appearanceMode" module:kFMModuleName] integerValue];
+    BOOL forceDark = (mode == 2);
+    BOOL forceLight = (mode == 1);
+    UIColor *dark = [UIColor colorWithRed:(secondary ? 0xC3 : 0xF3) / 255.0
+                                    green:(secondary ? 0xCE : 0xF7) / 255.0
+                                     blue:(secondary ? 0xDE : 0xFF) / 255.0
+                                    alpha:1.0];
+    UIColor *light = [UIColor colorWithRed:(secondary ? 0x4B : 0x18) / 255.0
+                                     green:(secondary ? 0x5B : 0x26) / 255.0
+                                      blue:(secondary ? 0x6C : 0x38) / 255.0
+                                     alpha:1.0];
+    if(forceDark) return dark;
+    if(forceLight) return light;
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light;
+    }];
+}
+
 static void FMLog(NSString *event, id details) {
     [LCOrbitLog appendEvent:event details:details kind:@"runtime"];
 }
@@ -308,12 +332,10 @@ static void FMSyncUI(void) {
         self.layer.cornerRadius = 12;
         self.layer.masksToBounds = YES;
 
-        UIImageSymbolConfiguration *small =
-            [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+        // 视觉规格对齐上游 FMSettingsNavigationRow（「侧边栏」行）：默认 chevron 图标。
         UIImageView *chevron =
-            [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"
-                                                          withConfiguration:small]];
-        chevron.tintColor = [UIColor secondaryLabelColor];
+            [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+        chevron.tintColor = FMBeadThemeColor(YES);
         chevron.contentMode = UIViewContentModeScaleAspectFit;
         chevron.translatesAutoresizingMaskIntoConstraints = NO;
         chevron.userInteractionEnabled = NO;
@@ -321,8 +343,8 @@ static void FMSyncUI(void) {
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectZero];
         title.text = @"微珠显隐";
-        title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-        title.textColor = [UIColor labelColor];
+        title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+        title.textColor = FMBeadThemeColor(NO);
         title.translatesAutoresizingMaskIntoConstraints = NO;
         title.userInteractionEnabled = NO;
         [self addSubview:title];
@@ -330,7 +352,7 @@ static void FMSyncUI(void) {
         UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectZero];
         subtitle.text = @"微珠隐藏、手势呼出、摇一摇显隐";
         subtitle.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
-        subtitle.textColor = [UIColor secondaryLabelColor];
+        subtitle.textColor = FMBeadThemeColor(YES);
         subtitle.translatesAutoresizingMaskIntoConstraints = NO;
         subtitle.userInteractionEnabled = NO;
         [self addSubview:subtitle];
@@ -338,7 +360,8 @@ static void FMSyncUI(void) {
         [NSLayoutConstraint activateConstraints:@[
             [chevron.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
             [chevron.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [chevron.widthAnchor constraintEqualToConstant:12],
+            [chevron.heightAnchor constraintEqualToConstant:14],
+            [chevron.widthAnchor constraintEqualToConstant:9],
             [title.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
             [title.topAnchor constraintEqualToAnchor:self.topAnchor constant:11],
             [title.trailingAnchor constraintLessThanOrEqualToAnchor:chevron.leadingAnchor constant:-8],

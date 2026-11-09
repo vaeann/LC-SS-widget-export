@@ -39,7 +39,7 @@ sh "$ROOT/LCOrbit/Tests/run-host-settings-tests.sh"
 python3 "$ROOT/LCOrbit/Tests/check-host-gestures.py"
 mkdir -p "$(dirname "$OUT")"
 xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.0 -fobjc-arc -O2 \
-    -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
+    -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore -framework AVFoundation \
     -framework CoreGraphics -framework Security -install_name '@rpath/LCFloatingMenu.dylib' \
     "$ROOT/LCOrbit/Core/LCOrbitCore.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHost.m" \
@@ -62,6 +62,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m" \
     "$ROOT/LCOrbit/Core/LCOrbitLogViewer.m" \
     "$ROOT/LCOrbit/Modules/HiddenBead/FMHiddenBeadModule.m" \
+    "$ROOT/LCOrbit/Modules/KeepAlive/FMKeepAlive.m" \
     "$ROOT/LCFloatingMenu/LCFloatingMenu.m" \
     -o "$OUT"
 file "$OUT"

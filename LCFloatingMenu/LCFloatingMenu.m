@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v21"
+#define FM_MENU_VERSION @"1.0.36v22"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4724,6 +4724,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(FMHostUI()) {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
             [self settingSwitch:s title:@"开启多任务" key:@"fullscreenMultitask" defaultValue:NO tag:19];
+            {
+                // 后台保活子页（开关 / 时长 / 看门狗），实现在 FMKeepAlive.m。
+                // 与微珠显隐入口同一套运行时查找，避免测试 harness 跨单元链接。
+                Class keepRowClass = NSClassFromString(@"FMKeepAliveRow");
+                UIView *keepRow = keepRowClass ? [keepRowClass new] : nil;
+                if(keepRow) [self addRow:keepRow height:60 to:s];
+            }
             [self section:@"多任务切换模式" sub:@"系统模式沿用 LC 窗口设置并隐藏微珠；微珠模式全屏切换，需要在 LC 设置中选择虚拟窗口，不会自动修改 LC 设置。" in:s];
             UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠"]];
             mode.selectedSegmentIndex=[LCOrbitMultitask usesSystemMenu]?0:1;
