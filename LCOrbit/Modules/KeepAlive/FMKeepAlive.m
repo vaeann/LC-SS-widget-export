@@ -150,9 +150,21 @@ static NSData *FMKSilentWAVData(void) {
 // ---- 宿主：是否有游客在跑 ---------------------------------------------------
 
 // 宿主音频整进程一份，只有「有游客在跑」时才值得播——没游客就不耗电。
-// 优先数 MultitaskDockManager.apps（@objc Swift 类，运行时查找，拿不到就退回场景数）。
+// 首选 LCOrbitMultitask.windows（宿主侧多任务窗口列表，是我们基线里的 ObjC 类，
+// 虚拟窗口模式同样有效）；拿不到再退回 Swift dock 管理器与场景数。
+// 注意：曾用「猜 Swift 类名 + connectedScenes.count>1」两路判定，实测在虚拟窗口
+// 模式下两路都拿不到（dock 类名带模块前缀、Guest 场景不在 connectedScenes 里），
+// 结果有游客在跑也判成"没有"，宿主保活从不启动。
 static BOOL FMKGuestsRunning(void) {
-    // NSClassFromString 对 Swift @objc 类需带模块前缀，两种写法都试。
+    Class multitask = NSClassFromString(@"LCOrbitMultitask");
+    if(multitask) {
+        SEL windowsSel = NSSelectorFromString(@"windows");
+        if([multitask respondsToSelector:windowsSel]) {
+            id windows = ((id (*)(id, SEL))objc_msgSend)((id)multitask, windowsSel);
+            if([windows respondsToSelector:@selector(count)]) return [windows count] > 0;
+        }
+    }
+    // 次选：NSClassFromString 对 Swift @objc 类需带模块前缀，两种写法都试。
     Class dockClass = NSClassFromString(@"MultitaskDockManager")
                    ?: NSClassFromString(@"LiveContainerSwiftUI.MultitaskDockManager");
     if(dockClass) {
@@ -166,8 +178,10 @@ static BOOL FMKGuestsRunning(void) {
             }
         }
     }
-    // 兜底：主场景之外还有场景 = 有游客（原生窗口模式）。
-    return UIApplication.sharedApplication.connectedScenes.count > 1;
+    // 两路都判不了：保守播。宿主保活多一路音频，比"判定失败导致扩展被回收"划算。
+    // （不再用 connectedScenes.count 兜底：虚拟窗口模式下 Guest 场景不在
+    // connectedScenes 里，恒为 1，会把"有游客"误判成"没有"。）
+    return YES;
 }
 
 // ---- 播放控制 ---------------------------------------------------------------
@@ -286,10 +300,19 @@ static void FMKStartWatchdog(void) {
 
 // 所有触发点都走这里，避免多处状态打架。
 static void FMKRefresh(void) {
+    static BOOL lastSkipNoGuests = NO;   // 去重：同一状态只记一条
     if(!FMKEnabled()) { FMKStopPlayback(@"disabled"); return; }
     if(!gInBackground) { FMKStopPlayback(@"foreground"); return; }
     if(gTimedOut) { FMKStopPlayback(@"timeout"); return; }
-    if(gIsHost && !FMKGuestsRunning()) { FMKStopPlayback(@"no-guests"); return; }
+    if(gIsHost && !FMKGuestsRunning()) {
+        if(!lastSkipNoGuests) {
+            lastSkipNoGuests = YES;
+            FMKLog(@"keep-alive-skip", @{@"reason": @"no-guests"});
+        }
+        FMKStopPlayback(@"no-guests");
+        return;
+    }
+    lastSkipNoGuests = NO;
     FMKStartPlayback(@"refresh");
     if(!gWatchdog) FMKStartWatchdog();
 }
