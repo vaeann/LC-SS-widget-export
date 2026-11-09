@@ -149,6 +149,35 @@ static NSData *FMKSilentWAVData(void) {
 
 // ---- 宿主：是否有游客在跑 ---------------------------------------------------
 
+// 判定取证：三路原始值都记下来。下次测试直接从日志看出哪一路有效，
+// 不用再猜。（dock 的 apps 属性无 @objc，ObjC 运行时不可见，这里是实证记录。）
+static NSDictionary *FMKGuestsProbe(void) {
+    NSMutableDictionary *probe = [NSMutableDictionary dictionary];
+
+    Class multitask = NSClassFromString(@"LCOrbitMultitask");
+    SEL windowsSel = NSSelectorFromString(@"windows");
+    if(!multitask) {
+        probe[@"windows"] = @"no-class";
+    } else if(![multitask respondsToSelector:windowsSel]) {
+        probe[@"windows"] = @"no-selector";
+    } else {
+        id windows = ((id (*)(id, SEL))objc_msgSend)((id)multitask, windowsSel);
+        probe[@"windows"] = @([windows respondsToSelector:@selector(count)] ? [windows count] : -1);
+    }
+
+    Class dockClass = NSClassFromString(@"MultitaskDockManager")
+                   ?: NSClassFromString(@"LiveContainerSwiftUI.MultitaskDockManager");
+    probe[@"dockClass"] = dockClass ? NSStringFromClass(dockClass) : @"nil";
+    if(dockClass) {
+        SEL appsSel = NSSelectorFromString(@"apps");
+        probe[@"dockApps"] = @([dockClass instancesRespondToSelector:appsSel] ||
+                               [dockClass respondsToSelector:appsSel]);
+    }
+
+    probe[@"scenes"] = @(UIApplication.sharedApplication.connectedScenes.count);
+    return probe;
+}
+
 // 宿主音频整进程一份，只有「有游客在跑」时才值得播——没游客就不耗电。
 // 首选 LCOrbitMultitask.windows（宿主侧多任务窗口列表，是我们基线里的 ObjC 类，
 // 虚拟窗口模式同样有效）；拿不到再退回 Swift dock 管理器与场景数。
@@ -307,7 +336,8 @@ static void FMKRefresh(void) {
     if(gIsHost && !FMKGuestsRunning()) {
         if(!lastSkipNoGuests) {
             lastSkipNoGuests = YES;
-            FMKLog(@"keep-alive-skip", @{@"reason": @"no-guests"});
+            FMKLog(@"keep-alive-skip", @{@"reason": @"no-guests",
+                                          @"probe": FMKGuestsProbe() ?: @{}});
         }
         FMKStopPlayback(@"no-guests");
         return;
@@ -324,8 +354,12 @@ static void FMKEnterBackground(NSString *source) {
     gInBackground = YES;
     gBackgroundStart = FMKNow();
     gTimedOut = NO;
-    FMKLog(@"keep-alive-background", @{@"source": source ?: @"",
-                                       @"role": gIsHost ? @"host" : @"guest"});
+    NSMutableDictionary *bg = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"source": source ?: @"",
+        @"role": gIsHost ? @"host" : @"guest",
+    }];
+    if(gIsHost) [bg addEntriesFromDictionary:FMKGuestsProbe()];
+    FMKLog(@"keep-alive-background", bg);
     FMKRefresh();
 }
 
