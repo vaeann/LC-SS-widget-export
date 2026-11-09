@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v20"
+#define FM_MENU_VERSION @"1.0.36v21"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -5799,6 +5799,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 22:key=@"unlockOrientation";break;
         case 23:key=@"keepScreenAwake";break;
         case 24:key=@"lockBanRightLandscape";break;
+        case 30:key=@"beadHideLandscape";break;
         case 25:key=@"autoCheckUpdate";break;
         case 26:key=@"autoLaunchLastApp";break;
         case 4:key=AppPref();break;
@@ -5818,6 +5819,13 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     if(sw.tag==24) {
         FMLog(@"lock-ban-right-landscape",sw.isOn?@"on":@"off");
+    }
+    if(sw.tag==30) {
+        // 横屏隐藏：立刻让微珠按新开关重算一次显隐（模块在 drawOrb 之后同步），
+        // 不用等下一次重绘或方向转场。
+        FMManager *beadManager=[FMManager shared];
+        if(beadManager) [beadManager drawOrb];
+        FMLog(@"bead-hide-landscape",sw.isOn?@"on":@"off");
     }
     if(sw.tag==26) {
         FMLog(@"auto-launch-last-app",sw.isOn?@"on":@"off");
