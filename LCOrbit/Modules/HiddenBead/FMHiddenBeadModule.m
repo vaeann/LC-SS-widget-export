@@ -407,6 +407,14 @@ static void FMSyncHotZone(UIView *orb) {
     if(![orb isKindOfClass:UIView.class]) return;
     FMBeadHotZone *zone = objc_getAssociatedObject(orb, &kFMHotZoneKey);
     BOOL want = FMHiddenMode() && FMSummonStyle() == 0;
+
+    // 孤儿清理：上游切换场景/重挂时会销毁并重建微珠，关联在旧微珠上的
+    // 热区会残留在 overlayView 上变成"幽灵点击区"。每次同步都把不属于
+    // 当前微珠的热区清掉。
+    for(UIView *sub in [orb.superview.subviews copy]) {
+        if([sub isKindOfClass:FMBeadHotZone.class] && sub != zone) [sub removeFromSuperview];
+    }
+
     if(want) {
         if(!zone) {
             zone = [[FMBeadHotZone alloc] initWithFrame:orb.frame];
