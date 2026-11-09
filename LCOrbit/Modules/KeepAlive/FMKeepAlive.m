@@ -47,7 +47,8 @@ static NSTimeInterval gBackgroundStart = 0;
 static BOOL gTimedOut = NO;          // 本次后台已满时长，回前台才复位
 static BOOL gInstalled = NO;
 static BOOL gIsHost = NO;            // YES = 纯 LC 界面进程；NO = 游客进程
-static UIBackgroundTaskIdentifier gBGTask = UIBackgroundTaskInvalid;   // 宿主第二通道
+static UIBackgroundTaskIdentifier gBGTask;   // 宿主第二通道（UIBackgroundTaskInvalid 不是编译期常量，用标志位区分）
+static BOOL gBGTaskActive = NO;
 
 static void FMKRefresh(void);   // 前置声明：播放决策在多处被调用，定义在下方
 
@@ -177,14 +178,15 @@ static void FMKStopWatchdog(void) {
 }
 
 static void FMKEndBackgroundTask(void) {
-    if(gBGTask == UIBackgroundTaskInvalid) return;
+    if(!gBGTaskActive) return;
     [UIApplication.sharedApplication endBackgroundTask:gBGTask];
-    gBGTask = UIBackgroundTaskInvalid;
+    gBGTask = 0;
+    gBGTaskActive = NO;
 }
 
 // 宿主第二通道：音频被打断时后台任务先顶住；过期时重开音频并续一个新任务。
 static void FMKBeginBackgroundTask(void) {
-    if(!gIsHost || gBGTask != UIBackgroundTaskInvalid) return;
+    if(!gIsHost || gBGTaskActive) return;
     gBGTask = [UIApplication.sharedApplication beginBackgroundTaskWithExpirationHandler:^{
         FMKEndBackgroundTask();
         if(gInBackground && !gTimedOut) {
@@ -192,6 +194,7 @@ static void FMKBeginBackgroundTask(void) {
             FMKRefresh();
         }
     }];
+    gBGTaskActive = YES;
 }
 
 static void FMKStartPlayback(NSString *trigger) {

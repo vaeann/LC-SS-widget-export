@@ -493,7 +493,7 @@ static void FMReplacementStart(id self, SEL _cmd, id context) {
     dispatch_async(dispatch_get_main_queue(), ^{
         FMMigrateLegacy();
         FMSyncUI();
-        if(FMHiddenEffective(FMIvar(FMSharedManager(), @"_orb")))
+        if(FMHiddenEffective(FMIvar(FMSharedManager(), "_orb")))
             FMLog(@"hidden-bead-active", @{@"hidden": @YES});
     });
 }
@@ -516,7 +516,7 @@ static void FMReplacementDrawOrb(id self, SEL _cmd) {
 
 static void FMReplacementMorphProgress(id self, SEL _cmd, CGFloat progress) {
     if(FMOriginalMorphProgress) FMOriginalMorphProgress(self, _cmd, progress);
-    UIView *orb = FMIvar(self, @"_orb");
+    UIView *orb = FMIvar(self, "_orb");
     if(![orb isKindOfClass:UIView.class] || !FMHiddenEffective(orb)) return;
     UIView *panel = FMObject(self, @"panel");
     if(![panel isKindOfClass:UIView.class]) return;
@@ -531,7 +531,7 @@ static void FMReplacementMotion(id self, SEL _cmd, UIEventSubtype motion, UIEven
     if(motion == UIEventSubtypeMotionShake && FMShakeToggle() && !FMManagerBusy()) {
         // 按当前实际显隐状态取反（横屏态下实际=隐藏，摇一下即固化隐藏），
         // 避免"摇了但看起来没反应"。
-        UIView *orb = FMIvar(self, @"_orb");
+        UIView *orb = FMIvar(self, "_orb");
         BOOL next = ![orb isKindOfClass:UIView.class] ? !FMHiddenMode()
                                                       : !FMHiddenEffective(orb);
         FMSetPref(kKeyHidden, @(next));
