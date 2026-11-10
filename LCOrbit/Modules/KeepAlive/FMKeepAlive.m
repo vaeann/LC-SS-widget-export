@@ -27,6 +27,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <math.h>
+#import <dlfcn.h>
 #import "../../Core/LCOrbitStorage.h"
 #import "../../Core/LCOrbitHost.h"
 #import "../../Core/LCOrbitLog.h"
@@ -149,6 +150,74 @@ static NSData *FMKSilentWAVData(void) {
 
 // ---- 宿主：是否有游客在跑 ---------------------------------------------------
 
+// ---- 跨进程保活状态（设置页面板用） --------------------------------------
+//
+// 每个进程写一份 keepalive-<pid>.json 到 dylib 同目录。宿主和所有 Guest
+// 加载的是同一个 dylib 文件，所以这个目录跨进程可见（CZF 项目已验证在此
+// 读写配置与日志，不依赖 App Group）。
+//
+// 看门狗每次巡检更新 beat —— 心跳在跳 = 进程真的在被系统调度（没被挂起）。
+// 这是比日志更硬的证据：日志只能证明代码执行过，心跳能证明进程还活着。
+
+static void FMKWriteState(void);   // 前置声明：dladdr 取本 dylib 路径也用它
+
+static NSString *FMKPluginDirectory(void) {
+    static NSString *cached = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Dl_info info;
+        if(dladdr((void *)&FMKWriteState, &info) == 0 || !info.dli_fname) return;
+        cached = [@(info.dli_fname) stringByDeletingLastPathComponent];
+    });
+    return cached;
+}
+
+static void FMKWriteState(void) {
+    NSString *dir = FMKPluginDirectory();
+    if(!dir.length) return;
+    NSDictionary *state = @{
+        @"v": @1,
+        @"pid": @(getpid()),
+        @"role": gIsHost ? @"host" : @"guest",
+        @"bundle": NSBundle.mainBundle.bundleIdentifier ?: @"",
+        @"playing": @(gPlayer.isPlaying ? YES : NO),
+        @"background": @(gInBackground),
+        @"timedOut": @(gTimedOut),
+        @"enabled": @(FMKEnabled()),
+        @"minutes": @(FMKMinutes()),
+        @"watchdog": @(FMKWatchdogMode()),
+        @"since": @(gBackgroundStart),
+        @"beat": @(FMKNow()),
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
+    if(!data) return;
+    NSString *path = [dir stringByAppendingPathComponent:
+                      [NSString stringWithFormat:@"keepalive-%d.json", getpid()]];
+    [data writeToFile:path atomically:YES];
+}
+
+// 读所有进程的状态。设置页在宿主进程读，能看到所有 Guest 写的文件。
+static NSArray<NSDictionary *> *FMKReadAllStates(void) {
+    NSString *dir = FMKPluginDirectory();
+    if(!dir.length) return @[];
+    NSArray *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
+    NSMutableArray *result = [NSMutableArray array];
+    for(NSString *name in names) {
+        if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
+        NSData *data = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:name]];
+        if(!data) continue;
+        id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if([obj isKindOfClass:NSDictionary.class]) [result addObject:obj];
+    }
+    [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL ah = [a[@"role"] isEqual:@"host"];
+        BOOL bh = [b[@"role"] isEqual:@"host"];
+        if(ah != bh) return ah ? NSOrderedAscending : NSOrderedDescending;
+        return [a[@"pid"] compare:b[@"pid"]];
+    }];
+    return result;
+}
+
 // 判定取证：三路原始值都记下来。下次测试直接从日志看出哪一路有效，
 // 不用再猜。（dock 的 apps 属性无 @objc，ObjC 运行时不可见，这里是实证记录。）
 static NSDictionary *FMKGuestsProbe(void) {
@@ -262,6 +331,7 @@ static void FMKStartPlayback(NSString *trigger) {
         FMKLog(@"keep-alive-start", @{@"role": gIsHost ? @"host" : @"guest",
                                        @"trigger": trigger ?: @"",
                                        @"pid": @(getpid())});
+        FMKWriteState();
     } @catch (__unused NSException *e) {
         // 保活失败绝不能拖垮宿主/游客：静默放弃，下次触发再试。
     }
@@ -277,6 +347,7 @@ static void FMKStopPlayback(NSString *reason) {
         FMKEndBackgroundTask();
         if(gPlayer) FMKLog(@"keep-alive-stop", @{@"reason": reason ?: @"",
                                                   @"role": gIsHost ? @"host" : @"guest"});
+        FMKWriteState();
     } @catch (__unused NSException *e) {}
 }
 
@@ -318,7 +389,10 @@ static void FMKStartWatchdog(void) {
             FMKStartPlayback(@"watchdog");
         }
 
-        // 3) 重建自己，让间隔随时间自适应
+        // 3) 心跳：证明本进程仍在被调度（没被挂起）
+        FMKWriteState();
+
+        // 4) 重建自己，让间隔随时间自适应
         FMKStartWatchdog();
     }];
     // 允许系统合并唤醒，省一点电
@@ -338,6 +412,7 @@ static void FMKRefresh(void) {
             lastSkipNoGuests = YES;
             FMKLog(@"keep-alive-skip", @{@"reason": @"no-guests",
                                           @"probe": FMKGuestsProbe() ?: @{}});
+            FMKWriteState();
         }
         FMKStopPlayback(@"no-guests");
         return;
@@ -360,6 +435,7 @@ static void FMKEnterBackground(NSString *source) {
     }];
     if(gIsHost) [bg addEntriesFromDictionary:FMKGuestsProbe()];
     FMKLog(@"keep-alive-background", bg);
+    FMKWriteState();
     FMKRefresh();
 }
 
@@ -369,6 +445,7 @@ static void FMKEnterForeground(NSString *source) {
     gTimedOut = NO;
     FMKLog(@"keep-alive-foreground", @{@"source": source ?: @"",
                                        @"role": gIsHost ? @"host" : @"guest"});
+    FMKWriteState();
     FMKStopPlayback(@"foreground");
 }
 
@@ -436,6 +513,8 @@ static void FMKeepAliveInit(void) {
             FMKRefresh();
         });
 
+        FMKWriteState();   // 初值：让状态面板立刻能看到本进程
+
         // 冷启动就处于后台（极少见）
         dispatch_async(dispatch_get_main_queue(), ^{
             if(UIApplication.sharedApplication.applicationState == UIApplicationStateBackground)
@@ -462,12 +541,14 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
 
 @interface FMKeepAliveController : UITableViewController
 - (void)closeTapped;
+- (void)configureStateCell:(UITableViewCell *)cell atRow:(NSInteger)row;
 @end
 
 @implementation FMKeepAliveController {
     UISwitch *_enabledSwitch;
     UISegmentedControl *_minutesSegment;
     UISegmentedControl *_watchdogSegment;
+    NSTimer *_refreshTimer;
 }
 
 - (void)viewDidLoad {
@@ -475,15 +556,36 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     self.title = @"后台保活";
     self.view.backgroundColor = FMKGroupedBackground(NO);
     self.tableView.alwaysBounceVertical = NO;
+    FMKWriteState();   // 打开面板时刷新本进程状态，立即能在列表里看到自己
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [_refreshTimer invalidate];
+    __weak typeof(self) weakSelf = self;
+    _refreshTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
+        [weakSelf.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+                          withRowAnimation:UITableViewRowAnimationNone];
+    }];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [_refreshTimer invalidate];
+    _refreshTimer = nil;
 }
 
 - (void)closeTapped {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if(section == 3) {
+        NSUInteger count = FMKReadAllStates().count;
+        return count ? count : 1;   // 一条都没有时占位显示"暂无记录"
+    }
     return 1;
 }
 
@@ -492,15 +594,20 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         return @"切到后台时循环播放一段听不见的音频，让系统认为进程还在工作，从而不被挂起。前台完全不播，零开销。";
     if(section == 1)
         return @"后台最多保活这么久，到点自动停，避免长时间挂在后台耗电。回到前台后重新计时。";
-    return @"看门狗定时检查音频是否还在播，被系统停掉就重新拉起。自适应：前 5 分钟每 30 秒，5-10 分钟每 45 秒，之后每 60 秒；关闭后不再巡检（来电打断恢复仍然有效）。";
+    if(section == 2)
+        return @"看门狗定时检查音频是否还在播，被系统停掉就重新拉起。自适应：前 5 分钟每 30 秒，5-10 分钟每 45 秒，之后每 60 秒；关闭后不再巡检（来电打断恢复仍然有效）。";
+    return @"每个进程（LC 宿主 + 每个游客 App）各写一份状态。心跳在跳 = 进程真的在被系统调度；无心跳超过 90 秒 = 可能已被系统挂起。";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     NSString *reuse = [NSString stringWithFormat:@"row%ld", (long)indexPath.section];
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-    if(!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-                                           reuseIdentifier:reuse];
+    if(!cell) {
+        UITableViewCellStyle style = indexPath.section == 3 ? UITableViewCellStyleSubtitle
+                                                            : UITableViewCellStyleDefault;
+        cell = [[UITableViewCell alloc] initWithStyle:style reuseIdentifier:reuse];
+    }
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     cell.backgroundColor = FMKGroupedBackground(YES);
 
@@ -524,6 +631,8 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
                       forControlEvents:UIControlEventValueChanged];
         }
         cell.accessoryView = _minutesSegment;
+    } else if(indexPath.section == 3) {
+        [self configureStateCell:cell atRow:indexPath.row];
     } else {
         cell.textLabel.text = @"看门狗";
         if(!_watchdogSegment) {
@@ -538,9 +647,65 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     return cell;
 }
 
+// 状态面板的一行：角色标题 + 状态副标题（颜色区分）。
+- (void)configureStateCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+    NSArray<NSDictionary *> *states = FMKReadAllStates();
+    cell.textLabel.textColor = FMKThemeColor(NO);
+    cell.detailTextLabel.textColor = FMKThemeColor(YES);
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    if(states.count == 0) {
+        cell.textLabel.text = @"暂无记录";
+        cell.detailTextLabel.text = @"切到后台后，各进程会陆续出现在这里";
+        return;
+    }
+    if(row >= (NSInteger)states.count) { cell.textLabel.text = @""; cell.detailTextLabel.text = @""; return; }
+
+    NSDictionary *state = states[row];
+    BOOL isHost = [state[@"role"] isEqual:@"host"];
+    BOOL playing = [state[@"playing"] boolValue];
+    BOOL background = [state[@"background"] boolValue];
+    BOOL timedOut = [state[@"timedOut"] boolValue];
+    BOOL enabled = [state[@"enabled"] boolValue];
+    NSInteger watchdog = [state[@"watchdog"] integerValue];
+    double beat = [state[@"beat"] doubleValue];
+    NSTimeInterval age = beat > 0 ? (FMKNow() - beat) : 99999;
+    BOOL fresh = age < 90.0;
+
+    NSString *bundle = state[@"bundle"] ?: @"";
+    cell.textLabel.text = isHost ? @"LC 宿主（界面进程）"
+                                 : (bundle.length ? bundle : @"游客进程");
+
+    NSString *status;
+    UIColor *color;
+    if(!enabled) {
+        status = @"开关关闭";
+        color = FMKThemeColor(YES);
+    } else if(!background) {
+        status = @"前台（不播）";
+        color = FMKThemeColor(YES);
+    } else if(timedOut) {
+        status = @"已到时长，已停止";
+        color = FMKThemeColor(YES);
+    } else if(playing) {
+        status = watchdog == 0 ? @"正在保活（看门狗关闭）"
+                               : [NSString stringWithFormat:@"正在保活 · 心跳 %.0f 秒前", age];
+        color = [UIColor colorWithRed:0.20 green:0.72 blue:0.35 alpha:1.0];
+    } else if(!fresh) {
+        status = [NSString stringWithFormat:@"无心跳 %.0f 秒，可能已被挂起", age];
+        color = [UIColor colorWithRed:0.90 green:0.30 blue:0.26 alpha:1.0];
+    } else {
+        status = @"已停止";
+        color = FMKThemeColor(YES);
+    }
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"pid %@ · %@", state[@"pid"], status];
+    cell.detailTextLabel.textColor = color;
+}
+
 - (void)enabledChanged:(UISwitch *)sender {
     FMKSetPref(kKeyEnabled, @(sender.on));
     FMKRefresh();
+    FMKWriteState();
     FMKLog(@"keep-alive-enabled-changed", @{@"on": @(sender.on)});
 }
 
@@ -548,6 +713,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     NSInteger minutes = sender.selectedSegmentIndex == 0 ? 10
                       : (sender.selectedSegmentIndex == 2 ? 30 : 20);
     FMKSetPref(kKeyMinutes, @(minutes));
+    FMKWriteState();
     FMKLog(@"keep-alive-minutes-changed", @{@"minutes": @(minutes)});
 }
 
@@ -557,6 +723,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     // 看门狗模式变了，正在跑的要按新间隔重建
     if(gInBackground) FMKStartWatchdog();
     FMKLog(@"keep-alive-watchdog-changed", @{@"mode": mode ? @"adaptive" : @"off"});
+    FMKWriteState();
 }
 
 @end
