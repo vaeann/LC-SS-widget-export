@@ -23,6 +23,17 @@ static BOOL TCName(NSString *name) {
         [name isEqualToString:name.lastPathComponent] && ![name hasPrefix:@"."] &&
         [name hasSuffix:@".dylib"] && ![name isEqualToString:@"TweakLoader.dylib"];
 }
+// LC keeps the filename the user imported, so the micro-bead may be stored as
+// "LCFloatingMenu-1.0.36v25.dylib" (optionally ".disabled"). Match the family,
+// never the exact canonical name only.
+static BOOL TCIsFloatingMenu(NSString *name) {
+    if(![name isKindOfClass:NSString.class] || !name.length) return NO;
+    NSString *base=[name hasSuffix:@".disabled"]?
+        [name substringToIndex:name.length-9]:name;
+    if(![base hasSuffix:@".dylib"]) return NO;
+    base=[base substringToIndex:base.length-6];
+    return [base isEqualToString:@"LCFloatingMenu"] || [base hasPrefix:@"LCFloatingMenu-"];
+}
 static NSString *TCHome(void) {
     const char *p=getenv("LC_HOME_PATH");
     return (p && p[0])?[NSString stringWithUTF8String:p]:nil;
@@ -229,7 +240,7 @@ static NSString *TCResult(NSString *action,NSString *message) {
 }
 + (NSString *)setPlugin:(NSString *)name enabled:(BOOL)enabled shared:(BOOL)shared {
     if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
-    if(!shared && !enabled && [name isEqualToString:@"LCFloatingMenu.dylib"])
+    if(!shared && !enabled && TCIsFloatingMenu(name))
         return @"为防止微珠管理入口失效，请从 LC 原生 Tweaks 页面手动停用宿主微珠。";
     NSString *root=TCRoot(shared),*active=[root stringByAppendingPathComponent:name];
     NSString *disabled=[active stringByAppendingString:@".disabled"];

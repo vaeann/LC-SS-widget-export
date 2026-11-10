@@ -9,6 +9,22 @@
 static NSString *AuditPath(NSString *path) {
     return [[path stringByStandardizingPath] stringByResolvingSymlinksInPath];
 }
+// LC keeps the imported filename, so the micro-bead may live as
+// "LCFloatingMenu-1.0.36v25.dylib" or "<name>.dylib.disabled".
+static BOOL AuditIsFloatingMenu(NSString *name) {
+    if(![name isKindOfClass:NSString.class] || !name.length) return NO;
+    NSString *base=[name hasSuffix:@".disabled"]?
+        [name substringToIndex:name.length-9]:name;
+    if(![base hasSuffix:@".dylib"]) return NO;
+    base=[base substringToIndex:base.length-6];
+    return [base isEqualToString:@"LCFloatingMenu"] || [base hasPrefix:@"LCFloatingMenu-"];
+}
+static NSString *AuditFloatingMenuIn(NSString *directory) {
+    NSArray *entries=[NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil];
+    for(NSString *name in entries)
+        if(AuditIsFloatingMenu(name)) return [directory stringByAppendingPathComponent:name];
+    return nil;
+}
 static NSString *AuditTweakRoot(NSString **context, NSDictionary **guestInfo) {
     NSDictionary *guest=[LCOrbitHost guestInfo];
     if(guestInfo) *guestInfo=guest;
@@ -57,7 +73,7 @@ static NSString *AuditBinaryComparison(NSString *candidate, NSString *running) {
 }
 static NSString *AuditRunningFloatingMenu(NSSet<NSString *> *images) {
     for(NSString *image in images)
-        if([image.lastPathComponent isEqualToString:@"LCFloatingMenu.dylib"]) return image;
+        if(AuditIsFloatingMenu(image.lastPathComponent)) return image;
     return nil;
 }
 static void AuditSharedStorage(NSSet<NSString *> *images, NSMutableArray<NSString *> *lines) {
@@ -84,7 +100,7 @@ static void AuditSharedStorage(NSSet<NSString *> *images, NSMutableArray<NSStrin
         if(![name hasSuffix:@".dylib"] && ![name hasSuffix:@".framework"] &&
            ![name hasSuffix:@".disabled"]) continue;
         NSString *path=[tweakRoot stringByAppendingPathComponent:name];
-        NSString *comparison=[name isEqualToString:@"LCFloatingMenu.dylib"] ?
+        NSString *comparison=AuditIsFloatingMenu(name) ?
             AuditBinaryComparison(path,running) : @"disk-present";
         [lines addObject:[NSString stringWithFormat:@"shared-global %@ %@",name,comparison]];
         found=YES;
@@ -105,8 +121,9 @@ static void AuditSharedStorage(NSSet<NSString *> *images, NSMutableArray<NSStrin
         NSString *selected=info[@"LCTweakFolder"];
         if(![selected isKindOfClass:NSString.class] || !selected.length) continue;
         if([selected containsString:@"/"] || [selected isEqualToString:@".."]) continue;
-        NSString *dylib=[[tweakRoot stringByAppendingPathComponent:selected]
-                          stringByAppendingPathComponent:@"LCFloatingMenu.dylib"];
+        NSString *folder=[tweakRoot stringByAppendingPathComponent:selected];
+        NSString *dylib=AuditFloatingMenuIn(folder) ?:
+            [folder stringByAppendingPathComponent:@"LCFloatingMenu.dylib"];
         NSString *comparison=AuditBinaryComparison(dylib,running);
         [lines addObject:[NSString stringWithFormat:
             @"shared-app %@ selected=%@ FloatingMenu=%@",name,selected,comparison]];
