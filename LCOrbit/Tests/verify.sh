@@ -93,7 +93,13 @@ if grep -Fq 'TCAppBackupRoot' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m" ||
     echo 'Persistent plugin backups must not return' >&2
     exit 1
 fi
-grep -Fq 'name isEqualToString:@"LCFloatingMenu.dylib"' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
+# The installed dylib keeps whatever filename the user imported (LC does not
+# rename it), so identifying the micro-bead must never fall back to an exact
+# basename comparison. Assert the content/family-based checks stay in place.
+grep -Fq 'UInstalledPlugins' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq '@rpath/LCFloatingMenu.dylib' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'TCIsFloatingMenu(name)' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
+grep -Fq 'AuditIsFloatingMenu(name)' "$ROOT/LCOrbit/Core/LCOrbitTweakAudit.m"
 grep -Fq 'appAssignmentsWithBackground:' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"
 grep -Fq 'pluginDetailsForName:' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"
 grep -Fq 'sharedDisabled' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
