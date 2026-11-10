@@ -857,7 +857,10 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         color = FMKThemeColor(YES);
     } else if(!background) {
         // 回后台是从头算满 10/20/30 分钟，不是接着上次的余额续，别写成「自动续」。
-        status = @"前台不保 · 回后台重新计时";
+        // 看门狗关着时前台也带一句，不然切回前台就看不到它处于关闭状态了。
+        status = watchdog == 0
+            ? @"前台不保 · 回后台重新计时 · 看门狗关闭"
+            : @"前台不保 · 回后台重新计时";
         color = FMKThemeColor(YES);
     } else if(timedOut) {
         // 用写入状态时的时长设置，避免中途改过 10/20/30 后文案对不上。
