@@ -45,6 +45,7 @@ static NSString *const kKeyWatchdog = @"keepAliveWatchdog";   // 1 自适应 / 0
 
 static AVAudioPlayer *gPlayer = nil;
 static NSTimer *gWatchdog = nil;
+static NSTimer *gTimeoutTimer = nil;   // 超时计时：独立于看门狗，关闭看门狗也生效
 static BOOL gInBackground = NO;
 static NSTimeInterval gBackgroundStart = 0;
 static BOOL gTimedOut = NO;          // 本次后台已满时长，回前台才复位
@@ -434,6 +435,39 @@ static void FMKStopWatchdog(void) {
     gWatchdog = nil;
 }
 
+static void FMKStopTimeoutTimer(void) {
+    [gTimeoutTimer invalidate];
+    gTimeoutTimer = nil;
+}
+
+static void FMKStopPlayback(NSString *reason);   // 前置声明：超时 timer 的回调里会调用
+
+// 超时计时独立于看门狗：看门狗管「音频还活着吗」，这个 timer 管「保活多久」。
+// 之前超时判定寄生在看门狗巡检里，关闭看门狗后巡检不跑，超时永远不会触发，
+// 保活会一直播到回到前台——设计缺陷，已拆开。
+static void FMKStartTimeoutTimer(void) {
+    FMKStopTimeoutTimer();
+    NSInteger minutes = FMKMinutes();
+    if(minutes <= 0) return;
+    NSTimeInterval remaining = minutes * 60.0 - (FMKNow() - gBackgroundStart);
+    if(remaining <= 0) {
+        gTimedOut = YES;
+        FMKLog(@"keep-alive-timeout", @{@"minutes": @(minutes),
+                                        @"role": gIsHost ? @"host" : @"guest",
+                                        @"immediate": @YES});
+        FMKStopPlayback(@"timeout");
+        return;
+    }
+    NSInteger limit = minutes;
+    gTimeoutTimer = [NSTimer scheduledTimerWithTimeInterval:remaining repeats:NO block:^(NSTimer *timer) {
+        if(!gInBackground) { FMKStopTimeoutTimer(); return; }
+        gTimedOut = YES;
+        FMKLog(@"keep-alive-timeout", @{@"minutes": @(limit),
+                                        @"role": gIsHost ? @"host" : @"guest"});
+        FMKStopPlayback(@"timeout");
+    }];
+}
+
 static void FMKEndBackgroundTask(void) {
     if(!gBGTaskActive) return;
     [UIApplication.sharedApplication endBackgroundTask:gBGTask];
@@ -486,6 +520,7 @@ static void FMKStartPlayback(NSString *trigger) {
 static void FMKStopPlayback(NSString *reason) {
     @try {
         FMKStopWatchdog();
+        FMKStopTimeoutTimer();
         // 记录「上次保活」：只有真起播过才写，否则前台反复刷新会把历史冲成 0 秒。
         if(gPlayStart > 0) {
             gLastPlayEnd = FMKNow();
@@ -522,30 +557,20 @@ static void FMKStartWatchdog(void) {
     gWatchdog = [NSTimer scheduledTimerWithTimeInterval:interval repeats:NO block:^(NSTimer *timer) {
         if(!gInBackground) { FMKStopWatchdog(); return; }
 
-        // 1) 超时判定
-        NSInteger minutes = FMKMinutes();
-        if(minutes > 0 && !gTimedOut) {
-            NSTimeInterval elapsed = FMKNow() - gBackgroundStart;
-            if(elapsed >= minutes * 60.0) {
-                gTimedOut = YES;
-                FMKLog(@"keep-alive-timeout", @{@"minutes": @(minutes),
-                                                @"role": gIsHost ? @"host" : @"guest"});
-                FMKStopPlayback(@"timeout");
-                return;
-            }
-        }
+        // 超时判定已移到独立的 gTimeoutTimer（看门狗关闭也生效）。
+        // 这里只负责两件事：音频存活检查、心跳。
 
-        // 2) 音频存活检查：停了就重建（会话可能已失效，连 player 一起重建）
+        // 1) 音频存活检查：停了就重建（会话可能已失效，连 player 一起重建）
         if(!gTimedOut && (!gPlayer || !gPlayer.isPlaying)) {
             FMKLog(@"keep-alive-revive", @{@"role": gIsHost ? @"host" : @"guest"});
             gPlayer = nil;
             FMKStartPlayback(@"watchdog");
         }
 
-        // 3) 心跳：证明本进程仍在被调度（没被挂起）
+        // 2) 心跳：证明本进程仍在被调度（没被挂起）
         FMKWriteState();
 
-        // 4) 重建自己，让间隔随时间自适应
+        // 3) 重建自己，让间隔随时间自适应
         FMKStartWatchdog();
     }];
     // 允许系统合并唤醒，省一点电
@@ -588,6 +613,7 @@ static void FMKEnterBackground(NSString *source) {
     }];
     if(gIsHost) [bg addEntriesFromDictionary:FMKGuestsProbe()];
     FMKLog(@"keep-alive-background", bg);
+    FMKStartTimeoutTimer();   // 独立于看门狗：关着看门狗也要按设定时长停
     FMKWriteState();
     FMKRefresh();
 }
