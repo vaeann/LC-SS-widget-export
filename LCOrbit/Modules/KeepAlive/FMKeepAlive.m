@@ -219,12 +219,20 @@ static NSString *FMKStateDirectory(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSString *root = [LCOrbitStorage rootPath];
-        if(!root.length) { cached = FMKPluginDirectory(); return; }
+        if(!root.length) {
+            cached = FMKPluginDirectory();
+            FMKLog(@"keep-alive-state-dir", @{@"root": @"(nil)", @"dir": cached ?: @"",
+                                              @"host": @(gIsHost)});
+            return;
+        }
         NSString *dir = [root stringByAppendingPathComponent:@"state"];
         BOOL ok = [NSFileManager.defaultManager createDirectoryAtPath:dir
                                           withIntermediateDirectories:YES
                                                            attributes:nil error:nil];
         cached = ok ? dir : FMKPluginDirectory();
+        // 定位问题的唯一线索：游客到底把状态写到哪个目录了。
+        FMKLog(@"keep-alive-state-dir", @{@"root": root, @"dir": cached ?: @"",
+                                          @"created": @(ok), @"host": @(gIsHost)});
     });
     return cached;
 }

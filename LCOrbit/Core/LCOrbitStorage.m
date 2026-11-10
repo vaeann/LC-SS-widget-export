@@ -58,9 +58,11 @@ static NSString *BackupPath(NSString *root) { return [root stringByAppendingPath
 // 从本 dylib 的位置反推配置目录。<root>/Documents/Tweaks/LCFloatingMenu.dylib
 // 往上找到 Tweaks，它的父目录就是 <root>/Documents。宿主和游客加载的是同一个
 // dylib（或同一份拷贝），这条路不依赖任何环境变量，两边必然算出同一个目录。
+// 注意：取的是「函数自身」的地址。dladdr 对函数地址可靠，对全局变量的数据
+// 地址不保证能解析出所属模块（之前用 &StorageError 就因此静默失败过）。
 static NSString *PluginStorageRoot(void) {
     Dl_info info;
-    if(dladdr((void *)&StorageError,&info)==0 || !info.dli_fname) return nil;
+    if(dladdr((void *)&PluginStorageRoot,&info)==0 || !info.dli_fname) return nil;
     NSString *dir=[@(info.dli_fname) stringByDeletingLastPathComponent];
     for(int depth=0;depth<4 && dir.length;depth++) {
         if([dir.lastPathComponent isEqualToString:@"Tweaks"])
@@ -216,14 +218,17 @@ static NSDictionary *ReadValues(void) {
     static dispatch_once_t once;
     dispatch_once(&once,^{
         NSMutableArray<NSString *> *candidates=[NSMutableArray array];
+        // dylib 反推排第一：它和 dylib 的实际位置强绑定，主客必然一致。
+        // 环境变量只作兜底——它们可能指向游客自己沙盒里的 Documents，
+        // 那里 createDirectory 也会成功，于是文件写进去、宿主永远看不到。
+        NSString *derived=PluginStorageRoot();
+        if(derived.length) [candidates addObject:derived];
         const char *lc=getenv("LC_HOME_PATH");
         if(lc && lc[0]) [candidates addObject:
             [@(lc) stringByAppendingPathComponent:@"Documents/LCOrbit"]];
         const char *lp=getenv("LP_HOME_PATH");
         if(lp && lp[0]) [candidates addObject:
             [@(lp) stringByAppendingPathComponent:@"Documents/LCOrbit"]];
-        NSString *derived=PluginStorageRoot();
-        if(derived.length) [candidates addObject:derived];
         NSFileManager *fm=NSFileManager.defaultManager;
         NSString *fallback=nil;
         for(NSString *path in candidates) {
