@@ -189,12 +189,13 @@ static NSData *FMKSilentWAVData(void) {
 
 // ---- 跨进程保活状态（设置页面板用） --------------------------------------
 //
-// 每个进程写一份 keepalive-<pid>.json。主客加载的是同一个 dylib，所以用
-// dladdr 取出的目录天然一致，不依赖 App Group。
+// 每个进程写一份 keepalive-<pid>.json。
 //
-// 但状态文件不能直接摆在 Tweaks 目录里 —— LC 的插件页会把目录下的条目
-// 列出来，那几个 json 会混在插件列表里。所以统一放进同级隐藏子目录
-// .lcfm/：主客算出的路径仍然相同，插件页也不会再看到它们。
+// 位置放在配置目录的 state/ 下（<LC 容器>/Documents/LCOrbit/state/），理由：
+//   · 和 config.json 同处一个目录，用户在 Filza 里看得见、能手动清；
+//   · 不在 Tweaks 里，LC 的插件页不会把它当成插件条目列出来；
+//   · LCOrbitStorage.rootPath 已经做了环境变量 + dylib 位置的回退，
+//     宿主和游客必然算出同一个目录。
 //
 // 看门狗每次巡检更新 beat —— 心跳在跳 = 进程真的在被系统调度（没被挂起）。
 
@@ -211,30 +212,35 @@ static NSString *FMKPluginDirectory(void) {
     return cached;
 }
 
-// .lcfm 子目录创建失败时退回 dylib 同目录：宁可被插件页看见，
+// 配置目录取不到时退回 dylib 同目录：宁可被插件页看见，
 // 也不能因为写不了状态让面板永远是空的。
 static NSString *FMKStateDirectory(void) {
     static NSString *cached = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSString *pluginDir = FMKPluginDirectory();
-        if(!pluginDir.length) return;
-        NSString *dir = [pluginDir stringByAppendingPathComponent:@".lcfm"];
+        NSString *root = [LCOrbitStorage rootPath];
+        if(!root.length) { cached = FMKPluginDirectory(); return; }
+        NSString *dir = [root stringByAppendingPathComponent:@"state"];
         BOOL ok = [NSFileManager.defaultManager createDirectoryAtPath:dir
                                           withIntermediateDirectories:YES
                                                            attributes:nil error:nil];
-        cached = ok ? dir : pluginDir;
+        cached = ok ? dir : FMKPluginDirectory();
     });
     return cached;
 }
 
-// 进程启动时清一次：进程已经不在了、或者超过 24 小时没更新过的状态文件。
-// 面板只在打开时清理，用户不打开面板的话这些文件会一直堆在目录里。
+// 进程启动时清一次，三条规则叠加，任何一条失效都不会让目录无限增长：
+//   1) 文件里记录的 pid 已经不存在了
+//   2) 超过 24 小时没更新过
+//   3) 数量超过 32 份时删最旧的（兜底，防止 1、2 都失灵）
+// 面板打开时另外还会清一次死进程。
+static NSUInteger const kFMKStateLimit = 32;
 static void FMKPurgeStaleStates(void) {
     NSString *dir = FMKStateDirectory();
     if(!dir.length) return;
     NSFileManager *fm = NSFileManager.defaultManager;
     NSTimeInterval now = FMKNow();
+    NSMutableArray<NSString *> *alive = [NSMutableArray array];
     for(NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
         if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
         NSString *path = [dir stringByAppendingPathComponent:name];
@@ -246,12 +252,30 @@ static void FMKPurgeStaleStates(void) {
         BOOL dead = pid > 0 && pid != (NSInteger)getpid() &&
                     kill((pid_t)pid, 0) != 0 && errno == ESRCH;
         BOOL stale = modified > 0 && now - modified > 24 * 3600;
-        if(dead || stale) [fm removeItemAtPath:path error:nil];
+        if(dead || stale) { [fm removeItemAtPath:path error:nil]; continue; }
+        [alive addObject:path];
     }
-    // 旧版本把状态直接写在插件目录里；迁移到 .lcfm 之后把遗留文件清掉，
-    // 否则插件页里那几个 json 会一直留着。
-    NSString *legacy = FMKPluginDirectory();
-    if(legacy.length && ![legacy isEqualToString:dir]) {
+    if(alive.count > kFMKStateLimit) {
+        NSArray<NSString *> *sorted = [alive sortedArrayUsingComparator:
+            ^NSComparisonResult(NSString *a, NSString *b) {
+                NSTimeInterval ta = [[fm attributesOfItemAtPath:a error:nil][NSFileModificationDate]
+                                     timeIntervalSince1970];
+                NSTimeInterval tb = [[fm attributesOfItemAtPath:b error:nil][NSFileModificationDate]
+                                     timeIntervalSince1970];
+                if(ta == tb) return NSOrderedSame;
+                return ta < tb ? NSOrderedAscending : NSOrderedDescending;
+            }];
+        for(NSUInteger i = 0; i + kFMKStateLimit < sorted.count; i++)
+            [fm removeItemAtPath:sorted[i] error:nil];
+    }
+    // 旧位置遗留：v26 及更早直接写在插件目录里，中间版本写在 .lcfm/ 里，
+    // 都清掉，否则插件页里那几个 json 会一直留着。
+    NSString *pluginDir = FMKPluginDirectory();
+    NSMutableArray<NSString *> *legacyDirs = [NSMutableArray array];
+    if(pluginDir.length && ![pluginDir isEqualToString:dir]) [legacyDirs addObject:pluginDir];
+    NSString *hidden = [pluginDir stringByAppendingPathComponent:@".lcfm"];
+    if(hidden.length && ![hidden isEqualToString:dir]) [legacyDirs addObject:hidden];
+    for(NSString *legacy in legacyDirs) {
         for(NSString *name in [fm contentsOfDirectoryAtPath:legacy error:nil] ?: @[]) {
             if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
             [fm removeItemAtPath:[legacy stringByAppendingPathComponent:name] error:nil];
