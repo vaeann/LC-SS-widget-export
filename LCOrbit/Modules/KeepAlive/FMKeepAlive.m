@@ -212,17 +212,17 @@ static NSString *FMKPluginDirectory(void) {
     return cached;
 }
 
-// 配置目录取不到时退回 dylib 同目录：宁可被插件页看见，
-// 也不能因为写不了状态让面板永远是空的。
+// 状态目录放 App Group 下的 state/：主客拿到的是同一个物理路径，
+// 不依赖 rootPath 的猜路径逻辑。App Group 不可用时退回 dylib 同目录。
 static NSString *FMKStateDirectory(void) {
     static NSString *cached = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSString *root = [LCOrbitStorage rootPath];
+        NSString *root = [LCOrbitStorage appGroupRootPath];
         if(!root.length) {
             cached = FMKPluginDirectory();
-            FMKLog(@"keep-alive-state-dir", @{@"root": @"(nil)", @"dir": cached ?: @"",
-                                              @"host": @(gIsHost)});
+            FMKLog(@"keep-alive-state-dir", @{@"root": @"(no-app-group)",
+                                              @"dir": cached ?: @"", @"host": @(gIsHost)});
             return;
         }
         NSString *dir = [root stringByAppendingPathComponent:@"state"];

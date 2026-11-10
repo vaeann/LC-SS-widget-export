@@ -21,6 +21,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable id)objectForKey:(NSString *)key module:(NSString *)identifier;
 + (void)setObject:(nullable id)object forKey:(NSString *)key module:(NSString *)identifier;
 + (nullable NSString *)rootPath;
+/// LC App Group 下的插件目录。宿主与游客拿到的是同一个物理路径，
+/// 是唯一不依赖环境变量/路径反推的跨进程通道；不可用时为 nil。
++ (nullable NSString *)appGroupRootPath;
 + (LCOrbitPreferences *)preferences;
 + (BOOL)reloadWithError:(NSError * _Nullable * _Nullable)error;
 + (nullable NSError *)lastError;

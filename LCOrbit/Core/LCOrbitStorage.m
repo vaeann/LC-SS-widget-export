@@ -5,6 +5,7 @@
 #import <fcntl.h>
 #import <unistd.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 #import <math.h>
 
 static NSError *StorageError;
@@ -55,6 +56,23 @@ static NSDictionary *LegacyValues(void) {
 }
 static NSString *ConfigPath(NSString *root) { return [root stringByAppendingPathComponent:@"config.json"]; }
 static NSString *BackupPath(NSString *root) { return [root stringByAppendingPathComponent:@"config.last-good.json"]; }
+// LC 的 App Group：宿主用系统 API 取真实路径后存进 NSUserDefaults.lcAppGroupPath，
+// 游客侧的 containerURLForSecurityApplicationGroupIdentifier 被 LC hook 成直接返回
+// 同一个路径（NSFileManager+GuestHooks.m）。所以这是主客唯一天然一致的目录，
+// 不用猜 LC_HOME_PATH，也不用从 dylib 位置反推。
+static NSString *LCAppGroupRoot(void) {
+    static NSString *cached = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class defaults = NSClassFromString(@"NSUserDefaults");
+        SEL selector = NSSelectorFromString(@"lcAppGroupPath");
+        if(!defaults || ![defaults respondsToSelector:selector]) return;
+        NSString *path = ((NSString *(*)(id,SEL))objc_msgSend)(defaults,selector);
+        if(![path isKindOfClass:NSString.class] || !path.length) return;
+        cached = [path stringByAppendingPathComponent:@"LCOrbit"];
+    });
+    return cached;
+}
 // 从本 dylib 的位置反推配置目录。<root>/Documents/Tweaks/LCFloatingMenu.dylib
 // 往上找到 Tweaks，它的父目录就是 <root>/Documents。宿主和游客加载的是同一个
 // dylib（或同一份拷贝），这条路不依赖任何环境变量，两边必然算出同一个目录。
@@ -92,6 +110,21 @@ static NSDictionary *ReadDocument(NSString *file,NSError **error) {
         return nil;
     }
     return values;
+}
+// 宿主每次保存都会往 App Group 写一份镜像，游客只读这一份。
+// 这样游客的 LC_HOME_PATH 指到哪里都无所谓，配置不会再静默回落到默认值。
+static BOOL WriteDocument(NSString *path,NSDictionary *values,NSError **error);
+static NSDictionary *ReadAppGroupMirror(void) {
+    NSString *root=LCAppGroupRoot();
+    if(!root.length) return nil;
+    return ReadDocument(ConfigPath(root),nil);
+}
+static void WriteAppGroupMirror(NSDictionary *values) {
+    NSString *root=LCAppGroupRoot();
+    if(!root.length || !values) return;
+    [NSFileManager.defaultManager createDirectoryAtPath:root
+                            withIntermediateDirectories:YES attributes:nil error:nil];
+    WriteDocument(ConfigPath(root),values,nil);
 }
 static NSData *DocumentData(NSDictionary *values,NSError **error) {
     NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"schemaVersion":@1,@"preferences":values}
@@ -150,6 +183,12 @@ static NSDictionary *Load(NSString *root,BOOL *valid,NSError **error) {
 }
 static NSDictionary *ReadValues(void) {
     @synchronized(LCOrbitStorage.class) {
+        // 游客优先读宿主写下的 App Group 镜像：它自己的 rootPath 可能指向
+        // 沙盒里一份空配置，读出来全是默认值（保活时长 20、开关永远开）。
+        if(![LCOrbitHost isHostUI]) {
+            NSDictionary *mirror=ReadAppGroupMirror();
+            if(mirror) return mirror;
+        }
         NSError *error=nil;NSString *root=[LCOrbitStorage rootPath];int lock=LockRoot(root,&error);
         if(lock<0) {
             StorageError=error?:Error(@"无法访问 LC 宿主配置目录。");
@@ -188,6 +227,7 @@ static NSDictionary *ReadValues(void) {
             if(value) next[key]=value;else [next removeObjectForKey:key];
             if(WriteDocument(ConfigPath(root),next,&error)) {
                 LastGood[root]=[next copy];WriteDocument(BackupPath(root),next,nil);
+                if([LCOrbitHost isHostUI]) WriteAppGroupMirror(next);
             }
         }
         Unlock(lock);StorageError=error;
@@ -238,6 +278,9 @@ static NSDictionary *ReadValues(void) {
         resolved=fallback ?: candidates.firstObject;
     });
     return resolved;
+}
++ (NSString *)appGroupRootPath {
+    return LCAppGroupRoot();
 }
 + (LCOrbitPreferences *)preferences {
     static LCOrbitPreferences *preferences;static dispatch_once_t once;
