@@ -4,6 +4,7 @@
 #import <sys/stat.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <dlfcn.h>
 #import <math.h>
 
 static NSError *StorageError;
@@ -54,6 +55,20 @@ static NSDictionary *LegacyValues(void) {
 }
 static NSString *ConfigPath(NSString *root) { return [root stringByAppendingPathComponent:@"config.json"]; }
 static NSString *BackupPath(NSString *root) { return [root stringByAppendingPathComponent:@"config.last-good.json"]; }
+// 从本 dylib 的位置反推配置目录。<root>/Documents/Tweaks/LCFloatingMenu.dylib
+// 往上找到 Tweaks，它的父目录就是 <root>/Documents。宿主和游客加载的是同一个
+// dylib（或同一份拷贝），这条路不依赖任何环境变量，两边必然算出同一个目录。
+static NSString *PluginStorageRoot(void) {
+    Dl_info info;
+    if(dladdr((void *)&StorageError,&info)==0 || !info.dli_fname) return nil;
+    NSString *dir=[@(info.dli_fname) stringByDeletingLastPathComponent];
+    for(int depth=0;depth<4 && dir.length;depth++) {
+        if([dir.lastPathComponent isEqualToString:@"Tweaks"])
+            return [[dir stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"LCOrbit"];
+        dir=[dir stringByDeletingLastPathComponent];
+    }
+    return nil;
+}
 static NSDictionary *ReadDocument(NSString *file,NSError **error) {
     struct stat info;
     if(lstat(file.fileSystemRepresentation,&info)!=0 || !S_ISREG(info.st_mode) || info.st_size<0 || (unsigned long long)info.st_size>MaximumConfigSize) {
@@ -192,8 +207,32 @@ static NSDictionary *ReadValues(void) {
 + (id)objectForKey:(NSString *)key module:(NSString *)identifier { return [[self preferences] objectForKey:[self key:key forModule:identifier]]; }
 + (void)setObject:(id)object forKey:(NSString *)key module:(NSString *)identifier { [[self preferences] setObject:object forKey:[self key:key forModule:identifier]]; }
 + (NSString *)rootPath {
-    const char *raw=getenv("LC_HOME_PATH");if(!raw || !raw[0]) return nil;
-    return [[NSString stringWithUTF8String:raw] stringByAppendingPathComponent:@"Documents/LCOrbit"];
+    // Guest（尤其多任务 LiveProcess）不一定有 LC_HOME_PATH：那个变量是宿主
+    // 透传过去的，透传不到时整个偏好系统会静默回落到默认值——保活时长永远
+    // 是默认 20 分钟、保活开关永远是开，改了设置也不生效。
+    // 所以这里按可信度排候选，并且优先选真正有 config.json 的那个，
+    // 避免 LockRoot 在错误路径上凭空建出一个空配置。
+    static NSString *resolved=nil;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{
+        NSMutableArray<NSString *> *candidates=[NSMutableArray array];
+        const char *lc=getenv("LC_HOME_PATH");
+        if(lc && lc[0]) [candidates addObject:
+            [@(lc) stringByAppendingPathComponent:@"Documents/LCOrbit"]];
+        const char *lp=getenv("LP_HOME_PATH");
+        if(lp && lp[0]) [candidates addObject:
+            [@(lp) stringByAppendingPathComponent:@"Documents/LCOrbit"]];
+        NSString *derived=PluginStorageRoot();
+        if(derived.length) [candidates addObject:derived];
+        NSFileManager *fm=NSFileManager.defaultManager;
+        NSString *fallback=nil;
+        for(NSString *path in candidates) {
+            if([fm fileExistsAtPath:ConfigPath(path)]) { resolved=path; return; }
+            if(!fallback && [fm fileExistsAtPath:path]) fallback=path;
+        }
+        resolved=fallback ?: candidates.firstObject;
+    });
+    return resolved;
 }
 + (LCOrbitPreferences *)preferences {
     static LCOrbitPreferences *preferences;static dispatch_once_t once;
