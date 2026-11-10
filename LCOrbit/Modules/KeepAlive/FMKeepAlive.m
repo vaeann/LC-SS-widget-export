@@ -229,26 +229,38 @@ static NSString *FMKStateDirectory(void) {
     return cached;
 }
 
-// 进程启动时清一次，三条规则叠加，任何一条失效都不会让目录无限增长：
-//   1) 文件里记录的 pid 已经不存在了
-//   2) 超过 24 小时没更新过
-//   3) 数量超过 32 份时删最旧的（兜底，防止 1、2 都失灵）
+// 固定文件名：宿主一份、每个游客按 bundle 一份。进程重启覆盖同一个文件，
+// 文件数天然封顶（1 + 用过几个 App），不依赖清理逻辑是否可靠。
+// 代价是同一个 App 多开时后写的那份覆盖前一份，面板会少一行——保活本身不受影响。
+static NSUInteger const kFMKStateLimit = 32;   // 兜底上限，正常永远碰不到
+static NSString *FMKStateFileName(void) {
+    if(gIsHost) return @"keepalive-host.json";
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier ?: @"";
+    if(!bundle.length) return [NSString stringWithFormat:@"keepalive-pid%d.json", getpid()];
+    NSString *safe = [[bundle stringByReplacingOccurrencesOfString:@"/" withString:@"_"]
+                              stringByReplacingOccurrencesOfString:@":" withString:@"_"];
+    return [NSString stringWithFormat:@"keepalive-%@.json", safe];
+}
+
+// 进程启动时清一次：pid 已不存在、超过 24 小时、或总数超过 32 份时删最旧的。
 // 面板打开时另外还会清一次死进程。
-static NSUInteger const kFMKStateLimit = 32;
 static void FMKPurgeStaleStates(void) {
     NSString *dir = FMKStateDirectory();
     if(!dir.length) return;
     NSFileManager *fm = NSFileManager.defaultManager;
     NSTimeInterval now = FMKNow();
+    NSString *own = FMKStateFileName();
     NSMutableArray<NSString *> *alive = [NSMutableArray array];
     for(NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
         if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
+        if([name isEqualToString:own]) continue;   // 自己的那份不动
         NSString *path = [dir stringByAppendingPathComponent:name];
         NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
         NSTimeInterval modified = [attrs[NSFileModificationDate] timeIntervalSince1970];
-        NSString *pidText = [[name stringByDeletingPathExtension]
-            stringByReplacingOccurrencesOfString:@"keepalive-" withString:@""];
-        NSInteger pid = pidText.integerValue;
+        // 文件名不再带 pid，只能从内容里取。读不出来就当成可回收。
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSInteger pid = [obj isKindOfClass:NSDictionary.class] ? [obj[@"pid"] integerValue] : 0;
         BOOL dead = pid > 0 && pid != (NSInteger)getpid() &&
                     kill((pid_t)pid, 0) != 0 && errno == ESRCH;
         BOOL stale = modified > 0 && now - modified > 24 * 3600;
@@ -306,8 +318,7 @@ static void FMKWriteState(void) {
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
     if(!data) return;
-    NSString *path = [dir stringByAppendingPathComponent:
-                      [NSString stringWithFormat:@"keepalive-%d.json", getpid()]];
+    NSString *path = [dir stringByAppendingPathComponent:FMKStateFileName()];
     [data writeToFile:path atomically:YES];
 }
 
