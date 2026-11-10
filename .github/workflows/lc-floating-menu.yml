@@ -80,10 +80,9 @@ jobs:
           LATEST_TAG="fm-latest"
           BINARY="dist/LCFloatingMenu.dylib"
           test -s "$BINARY"
-          # 规范名 LCFloatingMenu.dylib 必须保留：应用内更新与插件中心按这个名字找。
-          # 另存一份带版本号的副本，方便人认。
-          NAMED="dist/LCFloatingMenu-${VERSION}.dylib"
-          cp "$BINARY" "$NAMED"
+          # Only the canonical name is published. A second, version-suffixed copy
+          # gets loaded alongside it by LC (it loads every .dylib in the folder),
+          # which runs the constructor twice and makes the runtime panels lie.
           sha256sum "$BINARY" || shasum -a 256 "$BINARY"
 
           # Keep the actual .dylib name unchanged in BOTH releases.
@@ -95,10 +94,10 @@ jobs:
           fi
           # A version tag is immutable; re-running updates its asset only.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$BINARY" "$NAMED" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$BINARY" --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
           else
-            gh release create "$TAG" "$BINARY" "$NAMED" \
+            gh release create "$TAG" "$BINARY" \
               --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
               --title "LCFloatingMenu $VERSION" \
               --notes-file "$NOTES" \

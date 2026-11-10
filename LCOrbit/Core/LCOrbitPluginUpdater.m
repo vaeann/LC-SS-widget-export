@@ -193,7 +193,28 @@ static NSString *USharedPluginHint(void) {
         if([self replacePluginData:binary expectedSHA256:digest destination:target error:&one]) replaced++;
         else if(!firstError) firstError=one;
     }
-    if(replaced==targets.count) return YES;
+    // LC loads every .dylib in the folder. Two live copies of the micro-bead run
+    // the constructor twice with independent globals, and the two instances
+    // overwrite each other's state files — the panel then shows only one side.
+    // Keep exactly one live copy; the others are renamed to .disabled (kept on
+    // disk, so nothing is destroyed and the user can rename them back).
+    if(replaced == targets.count) {
+        NSString *keep=nil;
+        for(NSString *target in targets)
+            if([target.lastPathComponent isEqualToString:@"LCFloatingMenu.dylib"]) { keep=target; break; }
+        if(!keep) for(NSString *target in targets)
+            if([target.lastPathComponent hasSuffix:@".dylib"]) { keep=target; break; }
+        if(keep && targets.count > 1) {
+            for(NSString *target in targets) {
+                if([target isEqualToString:keep]) continue;
+                if([target.lastPathComponent hasSuffix:@".disabled"]) continue;
+                [NSFileManager.defaultManager moveItemAtPath:target
+                                                       toPath:[target stringByAppendingString:@".disabled"]
+                                                        error:nil];
+            }
+        }
+        return YES;
+    }
     if(error) *error=firstError?:UErr(10,@"替换插件失败，旧插件未被覆盖。");
     return NO;
 }
