@@ -189,12 +189,14 @@ static NSData *FMKSilentWAVData(void) {
 
 // ---- 跨进程保活状态（设置页面板用） --------------------------------------
 //
-// 每个进程写一份 keepalive-<pid>.json 到 dylib 同目录。宿主和所有 Guest
-// 加载的是同一个 dylib 文件，所以这个目录跨进程可见（CZF 项目已验证在此
-// 读写配置与日志，不依赖 App Group）。
+// 每个进程写一份 keepalive-<pid>.json。主客加载的是同一个 dylib，所以用
+// dladdr 取出的目录天然一致，不依赖 App Group。
+//
+// 但状态文件不能直接摆在 Tweaks 目录里 —— LC 的插件页会把目录下的条目
+// 列出来，那几个 json 会混在插件列表里。所以统一放进同级隐藏子目录
+// .lcfm/：主客算出的路径仍然相同，插件页也不会再看到它们。
 //
 // 看门狗每次巡检更新 beat —— 心跳在跳 = 进程真的在被系统调度（没被挂起）。
-// 这是比日志更硬的证据：日志只能证明代码执行过，心跳能证明进程还活着。
 
 static void FMKWriteState(void);   // 前置声明：dladdr 取本 dylib 路径也用它
 
@@ -209,8 +211,56 @@ static NSString *FMKPluginDirectory(void) {
     return cached;
 }
 
+// .lcfm 子目录创建失败时退回 dylib 同目录：宁可被插件页看见，
+// 也不能因为写不了状态让面板永远是空的。
+static NSString *FMKStateDirectory(void) {
+    static NSString *cached = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *pluginDir = FMKPluginDirectory();
+        if(!pluginDir.length) return;
+        NSString *dir = [pluginDir stringByAppendingPathComponent:@".lcfm"];
+        BOOL ok = [NSFileManager.defaultManager createDirectoryAtPath:dir
+                                          withIntermediateDirectories:YES
+                                                           attributes:nil error:nil];
+        cached = ok ? dir : pluginDir;
+    });
+    return cached;
+}
+
+// 进程启动时清一次：进程已经不在了、或者超过 24 小时没更新过的状态文件。
+// 面板只在打开时清理，用户不打开面板的话这些文件会一直堆在目录里。
+static void FMKPurgeStaleStates(void) {
+    NSString *dir = FMKStateDirectory();
+    if(!dir.length) return;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSTimeInterval now = FMKNow();
+    for(NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
+        if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
+        NSString *path = [dir stringByAppendingPathComponent:name];
+        NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+        NSTimeInterval modified = [attrs[NSFileModificationDate] timeIntervalSince1970];
+        NSString *pidText = [[name stringByDeletingPathExtension]
+            stringByReplacingOccurrencesOfString:@"keepalive-" withString:@""];
+        NSInteger pid = pidText.integerValue;
+        BOOL dead = pid > 0 && pid != (NSInteger)getpid() &&
+                    kill((pid_t)pid, 0) != 0 && errno == ESRCH;
+        BOOL stale = modified > 0 && now - modified > 24 * 3600;
+        if(dead || stale) [fm removeItemAtPath:path error:nil];
+    }
+    // 旧版本把状态直接写在插件目录里；迁移到 .lcfm 之后把遗留文件清掉，
+    // 否则插件页里那几个 json 会一直留着。
+    NSString *legacy = FMKPluginDirectory();
+    if(legacy.length && ![legacy isEqualToString:dir]) {
+        for(NSString *name in [fm contentsOfDirectoryAtPath:legacy error:nil] ?: @[]) {
+            if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
+            [fm removeItemAtPath:[legacy stringByAppendingPathComponent:name] error:nil];
+        }
+    }
+}
+
 static void FMKWriteState(void) {
-    NSString *dir = FMKPluginDirectory();
+    NSString *dir = FMKStateDirectory();
     if(!dir.length) return;
     NSDictionary *state = @{
         @"v": @1,
@@ -239,7 +289,7 @@ static void FMKWriteState(void) {
 
 // 读所有进程的状态。设置页在宿主进程读，能看到所有 Guest 写的文件。
 static NSArray<NSDictionary *> *FMKReadAllStates(void) {
-    NSString *dir = FMKPluginDirectory();
+    NSString *dir = FMKStateDirectory();
     if(!dir.length) return @[];
     NSArray *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
     NSMutableArray *result = [NSMutableArray array];
@@ -573,6 +623,7 @@ static void FMKeepAliveInit(void) {
             FMKRefresh();
         });
 
+        FMKPurgeStaleStates();   // 清掉已退出进程留下的状态、以及旧位置（插件目录）的遗留
         FMKWriteState();   // 初值：让状态面板立刻能看到本进程
 
         // 冷启动就处于后台（极少见）
@@ -762,7 +813,8 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         status = @"开关关闭 · 打开后才会保活";
         color = FMKThemeColor(YES);
     } else if(!background) {
-        status = @"前台不播 · 回到后台自动续";
+        // 回后台是从头算满 10/20/30 分钟，不是接着上次的余额续，别写成「自动续」。
+        status = @"前台不保 · 回后台重新计时";
         color = FMKThemeColor(YES);
     } else if(timedOut) {
         // 用写入状态时的时长设置，避免中途改过 10/20/30 后文案对不上。
@@ -782,11 +834,16 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
             : [NSString stringWithFormat:@"正在保活 · 已 %@ · %.0f 秒前有响应",
                                         FMKDuration(running), age];
         color = [UIColor colorWithRed:0.20 green:0.72 blue:0.35 alpha:1.0];
-    } else if(!fresh) {
+    } else if(watchdog != 0 && !fresh) {
+        // 只有「看门狗开着却一直没心跳」才算可能被挂起。
+        // 看门狗关闭时本来就没人周期性写 beat，判红纯属误报。
         status = [NSString stringWithFormat:@"失去响应 · %.0f 秒无回应", age];
         color = [UIColor colorWithRed:0.90 green:0.30 blue:0.26 alpha:1.0];
+    } else if(watchdog == 0) {
+        status = @"没有巡检 · 看门狗已关";
+        color = FMKThemeColor(YES);
     } else {
-        status = @"已经停止 · 等下次切后台";
+        status = @"已经停止 · 看门狗会拉起";
         color = FMKThemeColor(YES);
     }
 
