@@ -843,10 +843,9 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     BOOL fresh = age < 90.0;
 
     NSString *bundle = state[@"bundle"] ?: @"";
-    cell.textLabel.text = isHost ? @"LC 宿主"
-                                 : (bundle.length
-                                    ? [NSString stringWithFormat:@"游客 · %@", bundle]
-                                    : @"游客");
+    cell.textLabel.text = [NSString stringWithFormat:@"%@ · %@",
+                           isHost ? @"宿主" : @"游客",
+                           bundle.length ? bundle : @"未知"];
 
     // 第一行固定「四字状态 · 补充说明」的节奏，和下面「上次保活 · …」对齐。
     // 「已 X」说清保了多久，「X 秒前有响应」说清看门狗最后一次确认它还活着的时刻。
@@ -856,11 +855,9 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         status = @"开关关闭 · 打开后才会保活";
         color = FMKThemeColor(YES);
     } else if(!background) {
-        // 回后台是从头算满 10/20/30 分钟，不是接着上次的余额续，别写成「自动续」。
-        // 看门狗关着时前台也带一句，不然切回前台就看不到它处于关闭状态了。
-        status = watchdog == 0
-            ? @"前台不保 · 回后台重新计时 · 看门狗关闭"
-            : @"前台不保 · 回后台重新计时";
+        // 看门狗开/关始终带出来，切回前台也能看到它处于什么状态。
+        status = [NSString stringWithFormat:@"停止保活 · 回后台自动保活 · 看门狗%@",
+                                            watchdog == 0 ? @"关闭" : @"开启"];
         color = FMKThemeColor(YES);
     } else if(timedOut) {
         // 用写入状态时的时长设置，避免中途改过 10/20/30 后文案对不上。
