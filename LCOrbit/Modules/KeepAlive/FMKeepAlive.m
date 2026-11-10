@@ -142,9 +142,9 @@ static NSString *FMKDuration(NSTimeInterval seconds) {
 // 上次保活是怎么结束的——「到时长」和「你自己切回前台」是两回事，
 // 分开写才不会让人以为保活失败了。
 static NSString *FMKStopReasonText(NSString *reason) {
-    if([reason isEqual:@"timeout"]) return @"到时长";
-    if([reason isEqual:@"foreground"]) return @"回到前台";
-    if([reason isEqual:@"disabled"]) return @"关了开关";
+    if([reason isEqual:@"timeout"]) return @"时间到";
+    if([reason isEqual:@"foreground"]) return @"切前台";
+    if([reason isEqual:@"disabled"]) return @"未开启";
     if([reason isEqual:@"no-guests"]) return @"没游客";
     return reason.length ? reason : @"停止";
 }
@@ -888,7 +888,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     } else if(timedOut) {
         // 用写入状态时的时长设置，避免中途改过 10/20/30 后文案对不上。
         NSInteger limit = [state[@"minutes"] integerValue];
-        status = [NSString stringWithFormat:@"到达上限 · %ld 分钟 · 自动停播",
+        status = [NSString stringWithFormat:@"到达上限 · %ld 分钟 · 停止保活",
                                             (long)(limit > 0 ? limit : FMKMinutes())];
         color = FMKThemeColor(YES);
     } else if(playing) {
@@ -990,7 +990,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         [self addSubview:title];
 
         UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectZero];
-        subtitle.text = @"切后台后保持游客 App 不被挂起";
+        subtitle.text = @"切后台后保持多任务 App 不会被系统杀掉";
         subtitle.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
         subtitle.textColor = FMKThemeColor(YES);
         subtitle.translatesAutoresizingMaskIntoConstraints = NO;
