@@ -28,6 +28,8 @@
 #import <objc/message.h>
 #import <math.h>
 #import <dlfcn.h>
+#import <signal.h>
+#import <errno.h>
 #import "../../Core/LCOrbitStorage.h"
 #import "../../Core/LCOrbitHost.h"
 #import "../../Core/LCOrbitLog.h"
@@ -50,6 +52,16 @@ static BOOL gInstalled = NO;
 static BOOL gIsHost = NO;            // YES = 纯 LC 界面进程；NO = 游客进程
 static UIBackgroundTaskIdentifier gBGTask;   // 宿主第二通道（UIBackgroundTaskInvalid 不是编译期常量，用标志位区分）
 static BOOL gBGTaskActive = NO;
+
+// 保活计时（面板展示用）：
+//   gPlayStart      本次保活真正起播的时刻，0 = 当前没在播
+//   gLastPlayEnd    上一次保活结束的时刻（回前台/到时长/关开关都会记）
+//   gLastPlaySeconds上一次保活持续了多久
+// 面板刷新读的是各进程写进 JSON 的副本，所以切回前台后「上次」仍然看得到。
+static NSTimeInterval gPlayStart = 0;
+static NSTimeInterval gLastPlayEnd = 0;
+static NSTimeInterval gLastPlaySeconds = 0;
+static NSString *gLastPlayReason = nil;
 
 static void FMKRefresh(void);   // 前置声明：播放决策在多处被调用，定义在下方
 
@@ -109,6 +121,31 @@ static NSInteger FMKWatchdogMode(void) {
 
 static NSTimeInterval FMKNow(void) {
     return NSDate.date.timeIntervalSince1970;
+}
+
+// 时长文案：秒 / 分秒 / 时分。面板上「已 3 分 12 秒」比裸秒数好读。
+static NSString *FMKDuration(NSTimeInterval seconds) {
+    NSInteger total = (NSInteger)MAX(0.0, seconds);
+    if(total < 60) return [NSString stringWithFormat:@"%ld 秒", (long)total];
+    NSInteger minutes = total / 60;
+    NSInteger rest = total % 60;
+    if(minutes < 60)
+        return rest ? [NSString stringWithFormat:@"%ld 分 %ld 秒", (long)minutes, (long)rest]
+                    : [NSString stringWithFormat:@"%ld 分钟", (long)minutes];
+    NSInteger hours = minutes / 60;
+    minutes %= 60;
+    return minutes ? [NSString stringWithFormat:@"%ld 小时 %ld 分", (long)hours, (long)minutes]
+                   : [NSString stringWithFormat:@"%ld 小时", (long)hours];
+}
+
+// 上次保活是怎么结束的——「到时长自动停」和「你自己切回前台」是两回事，
+// 分开写才不会让人以为保活失败了。
+static NSString *FMKStopReasonText(NSString *reason) {
+    if([reason isEqual:@"timeout"]) return @"到时长自动停";
+    if([reason isEqual:@"foreground"]) return @"回到前台";
+    if([reason isEqual:@"disabled"]) return @"开关关闭";
+    if([reason isEqual:@"no-guests"]) return @"没有游客在跑";
+    return reason.length ? reason : @"结束";
 }
 
 // ---- 静音音频 ---------------------------------------------------------------
@@ -188,6 +225,10 @@ static void FMKWriteState(void) {
         @"watchdog": @(FMKWatchdogMode()),
         @"since": @(gBackgroundStart),
         @"beat": @(FMKNow()),
+        @"playStart": @(gPlayStart),
+        @"lastEnd": @(gLastPlayEnd),
+        @"lastSeconds": @(gLastPlaySeconds),
+        @"lastReason": gLastPlayReason ?: @"",
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
     if(!data) return;
@@ -204,10 +245,21 @@ static NSArray<NSDictionary *> *FMKReadAllStates(void) {
     NSMutableArray *result = [NSMutableArray array];
     for(NSString *name in names) {
         if(![name hasPrefix:@"keepalive-"] || ![name hasSuffix:@".json"]) continue;
-        NSData *data = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:name]];
+        NSString *path = [dir stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:path];
         if(!data) continue;
         id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if([obj isKindOfClass:NSDictionary.class]) [result addObject:obj];
+        if(![obj isKindOfClass:NSDictionary.class]) continue;
+        // 僵尸条目：游客退出后状态文件会留在目录里，进程早没了却永远显示
+        // 「无心跳」。清理掉，面板才不会越积越多。只有明确的 ESRCH 才删，
+        // 权限不足（EPERM）一律保留。
+        NSInteger pid = [obj[@"pid"] integerValue];
+        if(pid > 0 && pid != (NSInteger)getpid() &&
+           kill((pid_t)pid, 0) != 0 && errno == ESRCH) {
+            [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+            continue;
+        }
+        [result addObject:obj];
     }
     [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         BOOL ah = [a[@"role"] isEqual:@"host"];
@@ -327,6 +379,7 @@ static void FMKStartPlayback(NSString *trigger) {
             [gPlayer prepareToPlay];
         }
         [gPlayer play];
+        if(gPlayStart <= 0) gPlayStart = FMKNow();
         FMKBeginBackgroundTask();
         FMKLog(@"keep-alive-start", @{@"role": gIsHost ? @"host" : @"guest",
                                        @"trigger": trigger ?: @"",
@@ -340,6 +393,13 @@ static void FMKStartPlayback(NSString *trigger) {
 static void FMKStopPlayback(NSString *reason) {
     @try {
         FMKStopWatchdog();
+        // 记录「上次保活」：只有真起播过才写，否则前台反复刷新会把历史冲成 0 秒。
+        if(gPlayStart > 0) {
+            gLastPlayEnd = FMKNow();
+            gLastPlaySeconds = gLastPlayEnd - gPlayStart;
+            gLastPlayReason = reason ?: @"";
+            gPlayStart = 0;
+        }
         [gPlayer pause];
         [[AVAudioSession sharedInstance] setActive:NO
                                        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
@@ -549,6 +609,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     UISegmentedControl *_minutesSegment;
     UISegmentedControl *_watchdogSegment;
     NSTimer *_refreshTimer;
+    NSArray<NSDictionary *> *_states;   // 一次读取、两处使用，避免行数漂移
 }
 
 - (void)viewDidLoad {
@@ -557,6 +618,13 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     self.view.backgroundColor = FMKGroupedBackground(NO);
     self.tableView.alwaysBounceVertical = NO;
     FMKWriteState();   // 打开面板时刷新本进程状态，立即能在列表里看到自己
+    _states = FMKReadAllStates();
+}
+
+- (void)refreshStates {
+    _states = FMKReadAllStates();
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+                  withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -564,8 +632,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     [_refreshTimer invalidate];
     __weak typeof(self) weakSelf = self;
     _refreshTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
-        [weakSelf.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
-                          withRowAnimation:UITableViewRowAnimationNone];
+        [weakSelf refreshStates];
     }];
 }
 
@@ -583,10 +650,14 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     if(section == 3) {
-        NSUInteger count = FMKReadAllStates().count;
-        return count ? count : 1;   // 一条都没有时占位显示"暂无记录"
+        return _states.count ? _states.count : 1;   // 一条都没有时占位显示"暂无记录"
     }
     return 1;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    // 状态行要放三行小字（状态 + 上次保活，小屏可能折行），默认 44 装不下。
+    return indexPath.section == 3 ? 80.0 : 44.0;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -596,7 +667,7 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         return @"后台最多保活这么久，到点自动停，避免长时间挂在后台耗电。回到前台后重新计时。";
     if(section == 2)
         return @"看门狗定时检查音频是否还在播，被系统停掉就重新拉起。自适应：前 5 分钟每 30 秒，5-10 分钟每 45 秒，之后每 60 秒；关闭后不再巡检（来电打断恢复仍然有效）。";
-    return @"每个进程（LC 宿主 + 每个游客 App）各写一份状态。心跳在跳 = 进程真的在被系统调度；无心跳超过 90 秒 = 可能已被系统挂起。";
+    return @"每个进程（LC 宿主 + 每个游客）各写一份状态，每 3 秒刷新。「心跳 N 秒前」是看门狗上次巡检距今多少秒，不是已经保活了多久——巡检间隔 30-60 秒，这个数字来回跳属正常。「后台 X」从切到后台那一刻算起，和上面的时长限制同一口径，所以到点停播时它正好等于你设定的分钟数。「上次保活」记录上一轮实际播放了多久、为什么停，切回前台后仍保留。无心跳超过 90 秒才会标红，那才是可能被系统挂起。";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -647,11 +718,12 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     return cell;
 }
 
-// 状态面板的一行：角色标题 + 状态副标题（颜色区分）。
+// 状态面板的一行：角色标题 + 当前状态 + 上次保活记录（颜色区分）。
 - (void)configureStateCell:(UITableViewCell *)cell atRow:(NSInteger)row {
-    NSArray<NSDictionary *> *states = FMKReadAllStates();
+    NSArray<NSDictionary *> *states = _states ?: @[];
     cell.textLabel.textColor = FMKThemeColor(NO);
     cell.detailTextLabel.textColor = FMKThemeColor(YES);
+    cell.detailTextLabel.numberOfLines = 3;   // 小屏上状态行会折行，留出余量
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
     if(states.count == 0) {
@@ -669,6 +741,10 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     BOOL enabled = [state[@"enabled"] boolValue];
     NSInteger watchdog = [state[@"watchdog"] integerValue];
     double beat = [state[@"beat"] doubleValue];
+    double playStart = [state[@"playStart"] doubleValue];
+    double lastEnd = [state[@"lastEnd"] doubleValue];
+    double lastSeconds = [state[@"lastSeconds"] doubleValue];
+    NSString *lastReason = state[@"lastReason"] ?: @"";
     NSTimeInterval age = beat > 0 ? (FMKNow() - beat) : 99999;
     BOOL fresh = age < 90.0;
 
@@ -676,20 +752,30 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
     cell.textLabel.text = isHost ? @"LC 宿主（界面进程）"
                                  : (bundle.length ? bundle : @"游客进程");
 
+    // 第一行：此刻的真实状态。心跳只作为「最近一次巡检」的附注，
+    // 不再单独承担「保活了多久」的含义——那个由「后台 X」说清楚。
     NSString *status;
     UIColor *color;
     if(!enabled) {
         status = @"开关关闭";
         color = FMKThemeColor(YES);
     } else if(!background) {
-        status = @"前台（不播）";
+        status = isHost ? @"前台 · 无需保活" : @"前台 · 不播";
         color = FMKThemeColor(YES);
     } else if(timedOut) {
         status = @"已到时长，已停止";
         color = FMKThemeColor(YES);
     } else if(playing) {
-        status = watchdog == 0 ? @"正在保活（看门狗关闭）"
-                               : [NSString stringWithFormat:@"正在保活 · 心跳 %.0f 秒前", age];
+        // 「后台 X」和超时判定用同一个起算点（gBackgroundStart），这样不会出现
+        // 显示还没到时长、实际已经停了的错位。
+        double since = [state[@"since"] doubleValue];
+        double running = since > 0 ? FMKNow() - since
+                       : (playStart > 0 ? FMKNow() - playStart : 0);
+        status = watchdog == 0
+            ? [NSString stringWithFormat:@"正在保活 · 后台 %@（看门狗关闭）",
+                                        FMKDuration(running)]
+            : [NSString stringWithFormat:@"正在保活 · 后台 %@ · 心跳 %.0f 秒前",
+                                        FMKDuration(running), age];
         color = [UIColor colorWithRed:0.20 green:0.72 blue:0.35 alpha:1.0];
     } else if(!fresh) {
         status = [NSString stringWithFormat:@"无心跳 %.0f 秒，可能已被挂起", age];
@@ -698,7 +784,22 @@ static UIColor *FMKGroupedBackground(BOOL secondary) {
         status = @"已停止";
         color = FMKThemeColor(YES);
     }
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"pid %@ · %@", state[@"pid"], status];
+
+    // 第二行：上一轮保活。切回前台、状态变成「前台 · 不播」之后，
+    // 靠这一行仍然能看出刚才到底保了多久、为什么停的。
+    NSString *history;
+    if(lastEnd > 0) {
+        history = [NSString stringWithFormat:@"上次保活：%@前结束 · 持续 %@ · %@",
+                   FMKDuration(FMKNow() - lastEnd),
+                   FMKDuration(lastSeconds),
+                   FMKStopReasonText(lastReason)];
+    } else {
+        history = @"上次保活：本次运行还没有记录";
+    }
+
+    // pid 不上面板：bundle id 已经足够识别，省下的宽度留给状态文案，
+    // 小屏（SE 320pt）才不会把状态挤成两行。
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@", status, history];
     cell.detailTextLabel.textColor = color;
 }
 
