@@ -12,8 +12,6 @@ workflows:
     max_build_duration: 40
     environment:
       xcode: latest
-      groups:
-        - github_credentials
     scripts:
       - name: Build arm64 dylib and verify
         script: |
