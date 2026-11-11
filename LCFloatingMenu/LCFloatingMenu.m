@@ -233,10 +233,14 @@ static int FMGridColumns(void) {
     return 3+MAX(0,MIN(2,n));
 }
 static CGFloat FMGridIconSize(void) {
-    // Each column count keeps its own icon size; switching columns switches size.
-    NSString *key=[[NSString alloc] initWithFormat:@"menuGridIcon%d",FMGridColumns()];
+    // Each column count keeps its own icon size. The default leaves a roomy
+    // 18pt gap; the slider goes ±10, so the tightest setting still keeps a
+    // 10pt gap and the card never has to resize.
+    int cols=FMGridColumns();
+    NSString *key=[[NSString alloc] initWithFormat:@"menuGridIcon%d",cols];
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
-    return Clamp(v?[v floatValue]:40,24,60);
+    CGFloat def=cols==3?62:cols==4?42:30;
+    return Clamp(v?[v floatValue]:def,def-10,def+8);
 }
 static void SetPref(NSString *key,id value) {
     [HostDefaults() setObject:value forKey:Pref(key)];
@@ -4186,7 +4190,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         int cols=FMGridColumns();
         CGFloat gap=10,edge=3;
         CGFloat cell=((gridGlass?gridGlass.bounds.size.width:260)-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
-        CGFloat icon=MIN(FMGridIconSize(),cell-8);
+        CGFloat icon=MIN(FMGridIconSize(),cell);
         CGFloat inner=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
@@ -5515,7 +5519,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(1));SetPref(@"menuGridIcon4",@(40.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(1));SetPref(@"menuGridIcon4",@(42.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -7618,7 +7622,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             int cols=FMGridColumns();
             CGFloat gap=10,edge=3;
             CGFloat cell=(_pw-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
-            CGFloat icon=MIN(FMGridIconSize(),cell-8);
+            CGFloat icon=MIN(FMGridIconSize(),cell);
             CGFloat rowW=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
                 UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cell+6+4),rowW,cell+6)];
