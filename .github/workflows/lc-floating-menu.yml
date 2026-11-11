@@ -81,7 +81,7 @@ jobs:
       - name: Cross-compile arm64 dylib
         run: |
           set -euo pipefail
-          LCOrbit/Build/build-linux.sh dist/LCFloatingMenu.dylib
+          sh LCOrbit/Build/build-linux.sh dist/LCFloatingMenu.dylib
           file dist/LCFloatingMenu.dylib | grep -q 'Mach-O.*arm64'
           llvm-otool -D dist/LCFloatingMenu.dylib | grep -Fq '@rpath/LCFloatingMenu.dylib'
       - name: Upload GitHub Actions artifact
