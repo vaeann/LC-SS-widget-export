@@ -224,6 +224,11 @@ static int FMMenuLayout(void) {
 }
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
 static BOOL FMMenuCompact(void) { return FMMenuLayout()==FMLayoutCompact; }
+static int FMGridColumns(void) {
+    id v=FMStaged[Pref(@"menuGridColumnsV3")] ?: [HostDefaults() objectForKey:Pref(@"menuGridColumnsV3")];
+    int n=v?[v intValue]:4;
+    return MAX(2,MIN(6,n));
+}
 static CGFloat FMGridIconSize(void) {
     return Clamp(FloatPref(@"menuGridIconSize",40),24,64);
 }
@@ -499,6 +504,7 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
         @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
         @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1},
+        @{@"key":@"menuGridColumnsV3",@"title":@"宫格列数",@"min":@(2),"max":@(6),"default":@(4),"unit":@"列","step":@1},
         @{@"key":@"menuGridIconSize",@"title":@"宫格图标大小",@"min":@(24),@"max":@(60),@"default":@(40),@"unit":@"点",@"step":@1},
         // On top of whatever the head needs cleared, none of it by default; below zero it
         // lifts the whole block instead, as far as the top edge.
@@ -3910,16 +3916,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
-    // Grid rows: columns adapt to the icon-size slider, cells carry a caption.
-    CGFloat gridInner=pw-24,gridGap=4,gridIcon=FMGridIconSize();
-    int gridCols=MAX(2,MIN(8,(int)((gridInner+gridGap)/(gridIcon+gridGap))));
-    CGFloat gridCell=gridIcon;
-    // Cap at five rows like the list does; more apps scroll.
+    // Grid: a fixed column count of square cells with one shared 10pt gap on
+    // every side; the icon centers in its cell, so a wide layout keeps icons
+    // tasteful (capped by the cell) instead of growing with the layout.
+    CGFloat gridInner=pw-24,gridGap=10,gridEdge=3;
+    int gridCols=FMGridColumns();
+    CGFloat gridCell=(gridInner-2*gridEdge-(CGFloat)(gridCols-1)*gridGap)/(CGFloat)gridCols;
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
-    CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+4):
+    CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+6+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
-    if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell:[self appRowHeight])));
+    if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell+6:[self appRowHeight])));
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available/actualScale,target);
@@ -4172,54 +4179,54 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // icon-size slider. Same data source and tap/close handling as the rows.
         UIView *gridGlass=[self.panel viewWithTag:9230];
         CGFloat inner=(gridGlass?gridGlass.bounds.size.width:290)-24;
-        CGFloat icon=FMGridIconSize(),gap=4;
-        int cols=MAX(2,MIN(8,(int)((inner+gap)/(icon+gap))));
-        CGFloat pitch=icon+gap,cell=icon;
+        int cols=FMGridColumns();
+        CGFloat gap=10,edge=3;
+        CGFloat cell=(inner-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
+        CGFloat icon=MIN(FMGridIconSize(),cell-12);
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
         if(hiddenApps.count && _hiddenAppsExpanded) {
             // The grid manages hidden apps in its own horizontal strip under the
             // bar: tap a locked icon to bring the app back into the grid.
-            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,icon+8)];
+            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,cell+6)];
             strip.showsHorizontalScrollIndicator=NO;
             strip.alwaysBounceHorizontal=NO;
-            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(icon+gap));
-            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,icon)];
+            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(cell+gap));
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,cell)];
             NSUInteger hiddenIndex=0;
             for(NSDictionary *app in hiddenApps) {
-                UIControl *cell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*(icon+gap),0,icon,icon)];
+                UIControl *hCell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*(cell+gap)+edge,3,cell,cell)];
                 UIView *hiddenIcon=[self iconViewForApp:app size:icon];
-                hiddenIcon.frame=cell.bounds;
-                hiddenIcon.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-                [cell addSubview:hiddenIcon];
-                objc_setAssociatedObject(cell,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                [cell addTarget:self action:@selector(toggleAppHideFromCell:)
+                hiddenIcon.frame=CGRectMake((cell-icon)*.5,(cell-icon)*.5,icon,icon);
+                [hCell addSubview:hiddenIcon];
+                objc_setAssociatedObject(hCell,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [hCell addTarget:self action:@selector(toggleAppHideFromCell:)
                     forControlEvents:UIControlEventTouchUpInside];
-                [line addSubview:cell];
+                [line addSubview:hCell];
                 hiddenIndex++;
             }
-            strip.contentSize=CGSizeMake(total,icon);
+            strip.contentSize=CGSizeMake(total,cell);
             [strip addSubview:line];
-            [self addRow:strip height:icon+8 to:stack];
+            [self addRow:strip height:cell+6 to:stack];
         }
         // Hidden apps live in the strip above, so the grid itself stays clean.
         NSArray<NSDictionary *> *gridApps=(_hiddenAppsExpanded && hiddenApps.count)?normalApps:displayApps;
         NSUInteger index=0;
         while(index<gridApps.count) {
             NSUInteger span=MIN((NSUInteger)cols,gridApps.count-index);
-            // Fixed column widths, left-aligned: a short last row leaves the
-            // rest empty instead of spreading its icons across the full width.
-            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
+            // Square cells, left-aligned rows: a short last row leaves the rest
+            // of the row empty, and the icon centers inside its cell.
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell+6)];
             for(NSUInteger k=0;k<span;k++) {
                 NSDictionary *app=gridApps[index+k];
-                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(k*pitch,0,pitch,cell)];
+                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(edge+k*(cell+gap),3,cell,cell)];
                 cellView.backgroundColor=UIColor.clearColor;
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
                 [cellView addSubview:iconView];
                 [NSLayoutConstraint activateConstraints:@[
-                    [iconView.leadingAnchor constraintEqualToAnchor:cellView.leadingAnchor],
+                    [iconView.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
                     [iconView.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
                     [iconView.widthAnchor constraintEqualToConstant:icon],
                     [iconView.heightAnchor constraintEqualToConstant:icon]
@@ -4247,16 +4254,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     // The badge hugs the icon's top-right corner, not the whole cell.
                     [NSLayoutConstraint activateConstraints:@[
-                        [close.trailingAnchor constraintEqualToAnchor:cellView.leadingAnchor
-                            constant:icon-2],
-                        [close.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:-2],
+                        [close.trailingAnchor constraintEqualToAnchor:cellView.centerXAnchor
+                            constant:icon*.5-2],
+                        [close.topAnchor constraintEqualToAnchor:cellView.centerYAnchor
+                            constant:-icon*.5-2],
                         [close.widthAnchor constraintEqualToConstant:24],
                         [close.heightAnchor constraintEqualToConstant:24]
                     ]];
                 }
                 [line addSubview:cellView];
             }
-            [self addRow:line height:cell to:stack];
+            [self addRow:line height:cell+6 to:stack];
             index+=span;
         }
     } else if(FMMenuCompact()) {
@@ -5502,7 +5510,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(4));SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -7427,7 +7435,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
     CGFloat headroom=[manager menuHeadroom:_compact];
-    CGFloat rowHeight=_compact?63:(_grid?FMGridIconSize():MAX(56,48/MAX(.50,_actual)));
+    CGFloat gridCell=(290-24-2*3-(CGFloat)(FMGridColumns()-1)*10)/(CGFloat)FMGridColumns();
+    CGFloat rowHeight=_compact?63:(_grid?gridCell+6:MAX(56,48/MAX(.50,_actual)));
     CGFloat footer=_compact?76:44;
     _pw=_compact?76:(_grid?290:240);
     NSArray<NSDictionary *> *pinned=[manager pinnedApps];
@@ -7592,17 +7601,19 @@ static UIView *FMDockCard(UIStackView *rows) {
         [dividers addObject:divider];
         CGFloat top=_listTop;
         if(_grid) {
-            // Two rows of square cells, no captions; columns follow the icon slider.
-            CGFloat size=FMGridIconSize(),cellGap=4;
-            int cols=MAX(2,MIN(8,(int)((inner+cellGap)/(size+cellGap))));
-            CGFloat pitch=size+cellGap;
+            // Square cells of the configured column count; the icon centers in
+            // its cell, so the preview matches the real drawer exactly.
+            int cols=FMGridColumns();
+            CGFloat gap=10,edge=3;
+            CGFloat cell=(inner-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
+            CGFloat icon=MIN(FMGridIconSize(),cell-12);
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(size+4),inner,size)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cell+6+4),inner,cell+6)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
-                    UIView *icon=[self iconForSlot:slot size:size apps:apps];
-                    icon.frame=CGRectMake(col*pitch,0,size,size);
-                    [row addSubview:icon];
+                    UIView *iconView=[self iconForSlot:slot size:icon apps:apps];
+                    iconView.frame=CGRectMake(edge+col*(cell+gap)+(cell-icon)*.5,3+(cell-icon)*.5,icon,icon);
+                    [row addSubview:iconView];
                 }
                 [_content addSubview:row];
                 [items addObject:row];
@@ -8189,6 +8200,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     // The two layouts each keep their own icon size; only the one in use shows.
     [self addSlider:FMDockOption(@"menuCompactIconSize",@"图标大小") to:rows group:group when:FMDockWhenCompact];
     [self addSlider:FMDockOption(@"menuListIconSize",@"图标大小") to:rows group:group when:FMDockWhenList];
+    [self addSlider:FMDockOption(@"menuGridColumnsV3",@"宫格列数") to:rows group:group when:FMDockWhenGrid];
     [self addSlider:FMDockOption(@"menuGridIconSize",@"图标大小") to:rows group:group when:FMDockWhenGrid];
     [self add:[self segmentRow:@"弹出动画" items:@[@"逐个",@"一起",@"关"] key:@"popAnimation" selected:FMPopMode()]
            to:rows group:group when:FMDockWhenAlways];
