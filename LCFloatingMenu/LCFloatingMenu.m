@@ -7447,7 +7447,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         // inside their cell, and nothing about the card moves while a slider
         // drags — the same contract the list preview has always had.
         _pw=260;
-        rowHeight=(260-24-2*3-(CGFloat)(FMGridColumns()-1)*gridGap)/(CGFloat)FMGridColumns()+6;
+        rowHeight=(260-24-2*3-(CGFloat)(FMGridColumns()-1)*10)/(CGFloat)FMGridColumns()+6;
     } else {
         _pw=_compact?76:240;
     }
