@@ -316,7 +316,7 @@ static UIColor *ThemeMix(UIColor *a,UIColor *b,CGFloat t) {
     return [self key:key forModule:@"LCFloatingMenu"];
 }
 + (UIColor *)themeColorForRole:(LCOrbitColorRole)role dark:(BOOL)dark {
-    NSDictionary *prefs=[self preferences];
+    id prefs=[self preferences];   // LCOrbitPreferences singleton, dict-style access
     BOOL egg=[[prefs objectForKey:[self themeModuleKey:@"easterEggIOSTheme"]] boolValue];
     NSString *accentHex=[prefs objectForKey:[self themeModuleKey:dark?@"accentDark":@"accentLight"]];
     UIColor *accent=ThemeFromHex(accentHex,dark?0x8AC9FF:0x245DAB);
