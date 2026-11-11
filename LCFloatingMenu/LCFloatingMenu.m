@@ -3731,7 +3731,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     objc_setAssociatedObject(box,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
 
-    if(![app[@"builtin"] boolValue] && !current) {
+    // Long-press hides the app; skip it in the grid, where an accidental hold
+    // on a square cell is easy and the grid manages hidden apps in its own strip.
+    if(![app[@"builtin"] boolValue] && !current && !FMMenuGrid()) {
         UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(appIconHold:)];
         hold.minimumPressDuration=0.45;
         objc_setAssociatedObject(hold,@selector(appIconHold:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3758,6 +3760,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         NSDictionary *app=objc_getAssociatedObject(g, @selector(appIconHold:));
         [self toggleAppHide:app];
     }
+}
+// Grid hidden strip: tap a locked icon to bring the app back into the grid.
+- (void)toggleAppHideFromCell:(UIControl *)cell {
+    [self toggleAppHide:objc_getAssociatedObject(cell,@selector(switchFromRow:))];
 }
 - (CGFloat)taskCloseSize {
     return 48/MAX(.50,self.panelContentScale?:1);
@@ -4172,16 +4178,42 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
+        if(hiddenApps.count && _hiddenAppsExpanded) {
+            // The grid manages hidden apps in its own horizontal strip under the
+            // bar: tap a locked icon to bring the app back into the grid.
+            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,icon+8)];
+            strip.showsHorizontalScrollIndicator=NO;
+            strip.alwaysBounceHorizontal=NO;
+            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(icon+8));
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,icon)];
+            NSUInteger hiddenIndex=0;
+            for(NSDictionary *app in hiddenApps) {
+                UIControl *cell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*(icon+8),0,icon,icon)];
+                UIView *hiddenIcon=[self iconViewForApp:app size:icon];
+                hiddenIcon.frame=cell.bounds;
+                hiddenIcon.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+                [cell addSubview:hiddenIcon];
+                objc_setAssociatedObject(cell,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [cell addTarget:self action:@selector(toggleAppHideFromCell:)
+                    forControlEvents:UIControlEventTouchUpInside];
+                [line addSubview:cell];
+                hiddenIndex++;
+            }
+            strip.contentSize=CGSizeMake(total,icon);
+            [strip addSubview:line];
+            [self addRow:strip height:icon+8 to:stack];
+        }
+        // Hidden apps live in the strip above, so the grid itself stays clean.
+        NSArray<NSDictionary *> *gridApps=(_hiddenAppsExpanded && hiddenApps.count)?normalApps:displayApps;
         NSUInteger index=0;
-        while(index<displayApps.count) {
-            NSUInteger span=MIN((NSUInteger)cols,displayApps.count-index);
-            UIStackView *line=[[UIStackView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
-            line.axis=UILayoutConstraintAxisHorizontal;
-            line.distribution=UIStackViewDistributionFillEqually;
-            line.spacing=0;
+        while(index<gridApps.count) {
+            NSUInteger span=MIN((NSUInteger)cols,gridApps.count-index);
+            // Fixed column widths, left-aligned: a short last row leaves the
+            // rest empty instead of spreading its icons across the full width.
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
             for(NSUInteger k=0;k<span;k++) {
-                NSDictionary *app=displayApps[index+k];
-                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(0,0,cell,cell)];
+                NSDictionary *app=gridApps[index+k];
+                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(k*cellW,0,cellW,cell)];
                 cellView.backgroundColor=UIColor.clearColor;
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
@@ -4222,15 +4254,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                         [close.heightAnchor constraintEqualToConstant:24]
                     ]];
                 }
-                [line addArrangedSubview:cellView];
+                [line addSubview:cellView];
             }
             [self addRow:line height:cell to:stack];
             index+=span;
-        }
-        if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
-            CGFloat totalHeight=(hiddenApps.count - 1) * 14.0 + icon;
-            UIView *deck=[self compactHiddenAppsStackView:hiddenApps];
-            [self addRow:deck height:totalHeight to:stack];
         }
     } else if(FMMenuCompact()) {
         if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
@@ -8344,10 +8371,9 @@ static BOOL FMRowHiddenWithBead(UIView *row,FMDockGroup group) {
         return;
     }
     SetPref(control.key,@(control.selectedSegmentIndex));
-    if([control.key isEqualToString:@"orbHandleStyle"]) {
-        [self applyHandleNote];
-        [self applyVisibilityAnimated:YES];
-    }
+    if([control.key isEqualToString:@"orbHandleStyle"]) [self applyHandleNote];
+    // Layout switches re-show which option rows belong to the chosen layout.
+    [self applyVisibilityAnimated:YES];
     [self.preview reload];
     if(self.dockSettingsChanged) self.dockSettingsChanged();
     // Show what the pop-in setting does.
