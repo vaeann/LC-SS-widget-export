@@ -3888,12 +3888,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Keep the 63pt logical row hit region even when users choose 50% visual scale.
     UIEdgeInsets safe=self.window.safeAreaInsets;
     CGFloat usableWidth=bounds.size.width-safe.left-safe.right;
-    // Grid width wraps the icons: columns × (icon + gap) plus scroll margins.
-    CGFloat gridIcon=FMGridIconSize();
+    // Grid keeps a fixed width (between the list and the manage page): the
+    // cell count sets the cell size, and the icon scales inside its cell.
+    // A fixed card is what keeps the settings slider smooth — the original
+    // list preview behaves the same way.
     int gridCols=FMGridColumns();
     CGFloat gridGap=10;
-    CGFloat gridRowWidth=(CGFloat)gridCols*(gridIcon+gridGap);
-    CGFloat pw=MIN(small?(compact?76:(grid?gridRowWidth+24:240)):346,usableWidth-24);
+    CGFloat pw=MIN(small?(compact?76:(grid?260:240)):346,usableWidth-24);
     if(pw<=0) return;
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
@@ -3925,8 +3926,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
-    // Grid rows: the cell width comes from the panel width, height = cell + 6.
-    CGFloat gridCell=(gridRowWidth+24-24-2*3-(CGFloat)(gridCols-1)*gridGap)/(CGFloat)gridCols;
+    CGFloat gridCell=(260-24-2*3-(CGFloat)(gridCols-1)*gridGap)/(CGFloat)gridCols;
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
     CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+6+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
@@ -4185,8 +4185,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *gridGlass=[self.panel viewWithTag:9230];
         int cols=FMGridColumns();
         CGFloat gap=10,edge=3;
-        CGFloat cell=((gridGlass?gridGlass.bounds.size.width:240)-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
-        CGFloat icon=MIN(FMGridIconSize(),cell-10);
+        CGFloat cell=((gridGlass?gridGlass.bounds.size.width:260)-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
+        CGFloat icon=MIN(FMGridIconSize(),cell-8);
         CGFloat inner=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
@@ -7369,7 +7369,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
     NSArray<NSDictionary *> *_favorites;
-    BOOL _dirty,_placed,_left,_compact,_grid,_open,_revealed,_started,_faded,_rebuildScheduled,_pwDeferred;
+    BOOL _dirty,_placed,_left,_compact,_grid,_open,_revealed,_started,_faded,_rebuildScheduled;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
@@ -7443,17 +7443,11 @@ static UIView *FMDockCard(UIStackView *rows) {
     CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
     CGFloat footer=_compact?76:44;
     if(_grid) {
-        CGFloat icon=FMGridIconSize();
-        CGFloat targetPw=(CGFloat)FMGridColumns()*(icon+10)+24;
-        // 原版配合：拖动期间卡片尺寸锁在旧值，图标在旧格内实时缩放；
-        // 松手落盘（FMCommitStagedPreferences 清空暂存）后尺寸一次到位。
-        if(_pw>0 && FMHasStagedPreferences() && fabs(targetPw-_pw)>.5) {
-            _pwDeferred=YES;
-        } else {
-            _pwDeferred=NO;
-            _pw=targetPw;
-            rowHeight=(targetPw-24-2*3-(CGFloat)(FMGridColumns()-1)*10)/(CGFloat)FMGridColumns()+6;
-        }
+        // Fixed 260pt card: cells come from the column count, icons scale
+        // inside their cell, and nothing about the card moves while a slider
+        // drags — the same contract the list preview has always had.
+        _pw=260;
+        rowHeight=(260-24-2*3-(CGFloat)(FMGridColumns()-1)*gridGap)/(CGFloat)FMGridColumns()+6;
     } else {
         _pw=_compact?76:240;
     }
@@ -7624,7 +7618,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             int cols=FMGridColumns();
             CGFloat gap=10,edge=3;
             CGFloat cell=(_pw-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
-            CGFloat icon=MIN(FMGridIconSize(),cell-10);
+            CGFloat icon=MIN(FMGridIconSize(),cell-8);
             CGFloat rowW=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
                 UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cell+6+4),rowW,cell+6)];
