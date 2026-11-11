@@ -19,11 +19,11 @@
 #import "../LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
 #import "../LCOrbit/Core/LCOrbitLogViewer.h"
 #import <QuartzCore/QuartzCore.h>
-// Cross-toolchain shim: the theos iPhoneOS16.5 SDK predates the iOS 17 trait
-// registration API. Declarations only — every use below is guarded by
-// @available(iOS 17.0,*), so real SDKs skip this block entirely (their
-// UITraitUserInterfaceStyle.h exists) and the class binds weakly at runtime.
-#if !__has_include(<UIKit/UITraitUserInterfaceStyle.h>)
+// Cross-toolchain shim: SDKs older than iOS 17 (e.g. theos iPhoneOS16.5)
+// lack the trait registration API. Declarations only — every use below is
+// guarded by @available(iOS 17.0,*). SDK version macro is reliable here:
+// 16.5 -> 160500 < 170000 enables the shim; 17+/18+/26+ SDKs skip it.
+#if __IPHONE_OS_VERSION_MAX_ALLOWED < 170000
 @interface UITraitUserInterfaceStyle : NSObject
 @end
 @interface UIWindowScene (FMTraitRegistrationShim)
