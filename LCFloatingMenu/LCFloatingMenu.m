@@ -370,10 +370,6 @@ static UIUserInterfaceStyle FMMenuOverride(void) {
     return FMMenuAppearance();
 }
 static BOOL FMMenuDark(void) { return FMMenuAppearance()==UIUserInterfaceStyleDark; }
-typedef NS_ENUM(NSUInteger, FMColorRole) {
-    FMColorAccent, FMColorText, FMColorSecondary, FMColorBackground,
-    FMColorSurface, FMColorGlass, FMColorRow, FMColorTool, FMColorBorder
-};
 static UIColor *FMFromHex(NSString *hex, unsigned fallback) {
     unsigned rgb=fallback;
     if([hex isKindOfClass:NSString.class] && hex.length==7 && [hex hasPrefix:@"#"]) {
@@ -404,44 +400,10 @@ static UIColor *FMAccentFor(BOOL dark) {
     return FMFromHex([HostDefaults() stringForKey:Pref(dark?@"accentDark":@"accentLight")],
                      dark?0x8AC9FF:0x245DAB);
 }
+// Theme math lives in LCOrbitStorage so the module pages and entry rows
+// share the exact same palette (custom accent mixing included).
 static UIColor *FMThemeColor(FMColorRole role) {
-    BOOL dark=FMMenuDark();
-    if(BoolPref(@"easterEggIOSTheme", NO)) {
-        switch(role) {
-            case FMColorAccent:
-                return FMFromHex(dark?@"#0A84FF":@"#007AFF", dark?0x0A84FF:0x007AFF);
-            case FMColorText:
-                return FMFromHex(dark?@"#FFFFFF":@"#000000", dark?0xFFFFFF:0x000000);
-            case FMColorSecondary:
-                return FMFromHex(@"#8E8E93", 0x8E8E93);
-            case FMColorBackground:
-                return FMFromHex(dark?@"#000000":@"#F2F2F7", dark?0x000000:0xF2F2F7);
-            case FMColorSurface:
-                return FMFromHex(dark?@"#1C1C1E":@"#FFFFFF", dark?0x1C1C1E:0xFFFFFF);
-            case FMColorGlass:
-                return FMFromHex(dark?@"#2C2C2E":@"#E5E5EA", dark?0x2C2C2E:0xE5E5EA);
-            case FMColorRow:
-                return FMFromHex(dark?@"#1C1C1E":@"#FFFFFF", dark?0x1C1C1E:0xFFFFFF);
-            case FMColorTool:
-                return FMFromHex(dark?@"#2C2C2E":@"#E5E5EA", dark?0x2C2C2E:0xE5E5EA);
-            case FMColorBorder:
-                return FMFromHex(dark?@"#38383A":@"#D1D1D6", dark?0x38383A:0xD1D1D6);
-        }
-    }
-    UIColor *accent=FMAccentFor(dark);
-    UIColor *surface=FMFromHex(nil,dark?0x1A2537:0xFFFFFF);
-    switch(role) {
-        case FMColorAccent: return accent;
-        case FMColorText: return FMFromHex(nil,dark?0xF3F7FF:0x182638);
-        case FMColorSecondary: return FMFromHex(nil,dark?0xC3CEDE:0x4B5B6C);
-        case FMColorBackground: return FMMix(FMFromHex(nil,dark?0x0B1220:0xF7F9FD),accent,dark?.12:.085);
-        case FMColorSurface: return FMMix(surface,accent,dark?.21:.075);
-        case FMColorGlass: return FMMix(FMFromHex(nil,dark?0x22334A:0xF2F8FF),accent,.38);
-        case FMColorRow: return FMMix(surface,accent,dark?.36:.18);
-        case FMColorTool: return FMMix(surface,accent,dark?.43:.24);
-        case FMColorBorder: return FMMix(FMFromHex(nil,dark?0x6B829A:0x97A8B8),accent,.36);
-    }
-    return surface;
+    return [LCOrbitStorage themeColorForRole:role dark:FMMenuDark()];
 }
 static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
 static UIColor *FMSwitchGreen(void) {
@@ -514,9 +476,9 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
         @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
         @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1},
-        @{@"key":@"menuGridIcon3",@"title":@"3 列图标大小",@"min":@(24),@"max":@(60),@"default":@(40),@"unit":@"点",@"step":@1},
-        @{@"key":@"menuGridIcon4",@"title":@"4 列图标大小",@"min":@(24),@"max":@(60),@"default":@(40),@"unit":@"点",@"step":@1},
-        @{@"key":@"menuGridIcon5",@"title":@"5 列图标大小",@"min":@(24),@"max":@(60),@"default":@(40),@"unit":@"点",@"step":@1},
+        @{@"key":"menuGridIcon3",@"title":"3 列图标大小","min":@(52),"max":@(70),"default":@(62),"unit":"点","step":@1},
+        @{@"key":"menuGridIcon4",@"title":"4 列图标大小","min":@(32),"max":@(50),"default":@(42),"unit":"点","step":@1},
+        @{@"key":"menuGridIcon5",@"title":"5 列图标大小","min":@(20),"max":@(38),"default":@(30),"unit":"点","step":@1},
         // On top of whatever the head needs cleared, none of it by default; below zero it
         // lifts the whole block instead, as far as the top edge.
         @{@"key":@"menuTopPadding",@"title":@"上方留白",@"min":@(-16),@"max":@40,@"default":@0,@"unit":@"点",@"step":@1}
