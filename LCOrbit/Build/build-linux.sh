@@ -31,6 +31,7 @@ clang "$BUILD_COMMIT_FLAG" -target arm64-apple-ios16.0 \
     -framework Foundation -framework UIKit -framework QuartzCore -framework AVFoundation \
     -framework CoreGraphics -framework Security -lobjc \
     -install_name '@rpath/LCFloatingMenu.dylib' \
+    -Wl,-U,_OBJC_CLASS_$_UITraitUserInterfaceStyle \
     "$ROOT/LCOrbit/Core/LCOrbitCore.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHost.m" \
     "$ROOT/LCOrbit/Core/LCOrbitGuestService.m" \

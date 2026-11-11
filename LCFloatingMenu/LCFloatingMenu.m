@@ -19,6 +19,18 @@
 #import "../LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
 #import "../LCOrbit/Core/LCOrbitLogViewer.h"
 #import <QuartzCore/QuartzCore.h>
+// Cross-toolchain shim: the theos iPhoneOS16.5 SDK predates the iOS 17 trait
+// registration API. Declarations only — every use below is guarded by
+// @available(iOS 17.0,*), so real SDKs skip this block entirely (their
+// UITraitUserInterfaceStyle.h exists) and the class binds weakly at runtime.
+#if !__has_include(<UIKit/UITraitUserInterfaceStyle.h>)
+@interface UITraitUserInterfaceStyle : NSObject
+@end
+@interface UIWindowScene (FMTraitRegistrationShim)
+- (id)registerForTraitChanges:(NSArray *)traits withHandler:(id)handler;
+- (void)unregisterForTraitChanges:(id)registration;
+@end
+#endif
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <math.h>
