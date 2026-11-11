@@ -27,7 +27,7 @@ mkdir -p "$(dirname "$OUT")"
 # -target carries the deployment min version (16.0); ld64.lld resolves the
 # SDK's .tbd stubs for every -framework argument.
 clang "$BUILD_COMMIT_FLAG" -target arm64-apple-ios16.0 \
-    -isysroot "$SDK" -fobjc-arc -O2 -dynamiclib -fuse-ld=lld \
+    -isysroot "$SDK" -fobjc-arc -O2 -g0 -dynamiclib -fuse-ld=lld -Wl,-dead_strip \
     -framework Foundation -framework UIKit -framework QuartzCore -framework AVFoundation \
     -framework CoreGraphics -framework Security -lobjc \
     -install_name '@rpath/LCFloatingMenu.dylib' \
