@@ -223,6 +223,7 @@ static int FMMenuLayout(void) {
     return BoolPref(@"compactMode",NO)?FMLayoutCompact:FMLayoutList;
 }
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
+static BOOL FMMenuCompact(void) { return FMMenuLayout()==FMLayoutCompact; }
 static CGFloat FMGridIconSize(void) {
     return Clamp(FloatPref(@"menuGridIconSize",40),24,64);
 }
@@ -2983,7 +2984,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     _morphScale=scale;
     _morphRestCenter=panel.center;
     _morphShift=CGPointMake(dx,shift*scale);
-    _morphCompact=BoolPref(@"compactMode",NO);
+    _morphCompact=FMMenuCompact();
     // Read the style once per transition; the preference store is a file.
     _morphDrawer=FMDrawerNotchParams(pw,ph,_morphCompact);
     _morphShadow=panel.layer.shadowOpacity;
@@ -4231,7 +4232,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             UIView *deck=[self compactHiddenAppsStackView:hiddenApps];
             [self addRow:deck height:totalHeight to:stack];
         }
-    } else if(BoolPref(@"compactMode",NO)) {
+    } else if(FMMenuCompact()) {
         if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
             [self addRow:[self compactHiddenCollapseBarWithCount:hiddenApps.count] height:22 to:stack];
         }
@@ -4333,7 +4334,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
         empty.textColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMThemeColor(FMColorSecondary);
-        [self addRow:empty height:BoolPref(@"compactMode",NO)?68:[self appRowHeight] to:stack];
+        [self addRow:empty height:FMMenuCompact()?68:[self appRowHeight] to:stack];
     }
 }
 - (void)buildAppHeader:(UIView *)glass {
@@ -4343,7 +4344,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     CGFloat w=glass.bounds.size.width, inner=w-24;
     // Favorites show icons only; app names remain available to VoiceOver.
     NSArray<NSDictionary *> *pinned=[self pinnedApps];
-    BOOL compact=BoolPref(@"compactMode",NO);
+    BOOL compact=FMMenuCompact();
     CGFloat gap=4,cell=(inner-gap*3)/4;
     // Fewer than four sit in the middle instead of leaving the whole gap at one end.
     CGFloat left=12+(inner-(cell*pinned.count+gap*(pinned.count?pinned.count-1:0)))*.5;
@@ -4512,7 +4513,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     return pinned.count<apps.count?pinned:@[];
 }
 - (void)buildAppFooter:(UIView *)glass {
-    BOOL compact=BoolPref(@"compactMode",NO);
+    BOOL compact=FMMenuCompact();
     NSMutableArray<NSArray*> *items=[NSMutableArray array];
     if(compact) {
         [items addObject:@[@"house.fill",NSStringFromSelector(@selector(compactReturnHome)),@"返回首页"]];
