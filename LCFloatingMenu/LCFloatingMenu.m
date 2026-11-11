@@ -3905,7 +3905,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Grid rows: columns adapt to the icon-size slider, cells carry a caption.
     CGFloat gridInner=pw-24,gridGap=8,gridIcon=FMGridIconSize();
     int gridCols=MAX(2,MIN(8,(int)((gridInner+gridGap)/(gridIcon+gridGap))));
-    CGFloat gridCell=gridIcon+20;
+    CGFloat gridCell=gridIcon;
     NSUInteger gridRows=MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols);
     CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
@@ -4159,13 +4159,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
 
     if(FMMenuGrid()) {
-        // Grid layout: square icon cells with a caption; columns adapt to the
+        // Grid layout: square icon cells, no captions; columns adapt to the
         // icon-size slider. Same data source and tap/close handling as the rows.
         UIView *gridGlass=[self.panel viewWithTag:9230];
         CGFloat inner=(gridGlass?gridGlass.bounds.size.width:290)-24;
         CGFloat icon=FMGridIconSize(),gap=8;
         int cols=MAX(2,MIN(8,(int)((inner+gap)/(icon+gap))));
-        CGFloat cellW=inner/(CGFloat)cols,cell=icon+20;
+        CGFloat cellW=inner/(CGFloat)cols,cell=icon;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
@@ -4183,22 +4183,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
                 [cellView addSubview:iconView];
-                UILabel *caption=[[FMManager shared] label:FMAppCaption(app) size:11
-                                                    weight:UIFontWeightMedium];
-                caption.numberOfLines=1;
-                caption.lineBreakMode=NSLineBreakByTruncatingTail;
-                caption.textAlignment=NSTextAlignmentCenter;
-                caption.translatesAutoresizingMaskIntoConstraints=NO;
-                [cellView addSubview:caption];
                 [NSLayoutConstraint activateConstraints:@[
                     [iconView.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
-                    [iconView.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:0],
+                    [iconView.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
                     [iconView.widthAnchor constraintEqualToConstant:icon],
-                    [iconView.heightAnchor constraintEqualToConstant:icon],
-                    [caption.topAnchor constraintEqualToAnchor:iconView.bottomAnchor constant:3],
-                    [caption.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
-                    [caption.widthAnchor constraintLessThanOrEqualToAnchor:cellView.widthAnchor
-                        constant:-4]
+                    [iconView.heightAnchor constraintEqualToConstant:icon]
                 ]];
                 cellView.accessibilityLabel=FMAppCaption(app);
                 cellView.accessibilityTraits=UIAccessibilityTraitButton;
@@ -7404,7 +7393,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
     CGFloat headroom=[manager menuHeadroom:_compact];
-    CGFloat rowHeight=_compact?63:(_grid?FMGridIconSize()+20:MAX(56,48/MAX(.50,_actual)));
+    CGFloat rowHeight=_compact?63:(_grid?FMGridIconSize():MAX(56,48/MAX(.50,_actual)));
     CGFloat footer=_compact?76:44;
     _pw=_compact?76:(_grid?290:240);
     NSArray<NSDictionary *> *pinned=[manager pinnedApps];
@@ -7569,25 +7558,17 @@ static UIView *FMDockCard(UIStackView *rows) {
         [dividers addObject:divider];
         CGFloat top=_listTop;
         if(_grid) {
-            // Two rows of square cells with captions; columns follow the icon slider.
+            // Two rows of square cells, no captions; columns follow the icon slider.
             CGFloat size=FMGridIconSize(),cellGap=8;
             int cols=MAX(2,MIN(8,(int)((inner+cellGap)/(size+cellGap))));
-            CGFloat cellW=inner/(CGFloat)cols,cellH=size+20;
+            CGFloat cellW=inner/(CGFloat)cols;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cellH+4),inner,cellH)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(size+4),inner,size)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *icon=[self iconForSlot:slot size:size apps:apps];
-                    icon.frame=CGRectMake((cellW-size)*.5,0,size,size);
+                    icon.frame=CGRectMake(col*cellW+(cellW-size)*.5,0,size,size);
                     [row addSubview:icon];
-                    if(slot<apps.count) {
-                        UILabel *title=[manager label:FMAppCaption(apps[slot]) size:11 weight:UIFontWeightMedium];
-                        title.numberOfLines=1;
-                        title.lineBreakMode=NSLineBreakByTruncatingTail;
-                        title.textAlignment=NSTextAlignmentCenter;
-                        title.frame=CGRectMake(0,cellH-16,cellW,14);
-                        [row addSubview:title];
-                    }
                 }
                 [_content addSubview:row];
                 [items addObject:row];
@@ -7617,10 +7598,22 @@ static UIView *FMDockCard(UIStackView *rows) {
                 [items addObject:row];
             }
         }
+        // The footer mirrors buildAppFooter's non-compact items exactly, so the
+        // preview always shows the same buttons in the same slots as the real drawer.
+        NSMutableArray<NSString *> *glyphs=[NSMutableArray array];
+        if([LCOrbitMultitask isEnabled]) {
+            [glyphs addObject:@"house.fill"];
+            [glyphs addObject:@"xmark.circle"];
+        }
+        if(!FMHostUI()) {
+            if(BoolPref(@"showRestart",YES)) [glyphs addObject:@"arrow.clockwise"];
+            [glyphs addObject:@"house.fill"];
+        }
+        [glyphs addObject:@"gearshape.fill"];
+        [glyphs addObject:_left?@"chevron.compact.left":@"chevron.compact.right"];
         UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-44-6-28,inner,44)];
         [_content addSubview:bar];
-        NSArray<NSString *> *glyphs=@[@"house.fill",@"gearshape.fill",_left?@"chevron.compact.left":@"chevron.compact.right"];
-        CGFloat slot=inner/glyphs.count;
+        CGFloat slot=bar.bounds.size.width/glyphs.count;
         for(NSUInteger index=0;index<glyphs.count;index++) {
             UIView *tile=[self footerTile:glyphs[index] compact:NO size:36];
             tile.frame=CGRectMake(index*slot+(slot-36)*.5,(44-36)*.5,36,36);
