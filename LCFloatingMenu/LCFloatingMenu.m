@@ -227,9 +227,10 @@ static int FMMenuLayout(void) {
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
 static BOOL FMMenuCompact(void) { return FMMenuLayout()==FMLayoutCompact; }
 static int FMGridColumns(void) {
+    // The segment stores its display index (0=3 列, 1=4 列, 2=5 列).
     id v=FMStaged[Pref(@"menuGridColumnsV3")] ?: [HostDefaults() objectForKey:Pref(@"menuGridColumnsV3")];
-    int n=v?[v intValue]:4;
-    return MAX(3,MIN(5,n));
+    int n=v?[v intValue]:1;
+    return 3+MAX(0,MIN(2,n));
 }
 static CGFloat FMGridIconSize(void) {
     // Each column count keeps its own icon size; switching columns switches size.
@@ -5514,7 +5515,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(4));SetPref(@"menuGridIcon4",@(40.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(1));SetPref(@"menuGridIcon4",@(40.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -7454,7 +7455,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             rowHeight=(targetPw-24-2*3-(CGFloat)(FMGridColumns()-1)*10)/(CGFloat)FMGridColumns()+6;
         }
     } else {
-        _pw=240;
+        _pw=_compact?76:240;
     }
     NSArray<NSDictionary *> *pinned=[manager pinnedApps];
     if(!pinned.count) {
