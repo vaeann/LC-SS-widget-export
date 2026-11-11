@@ -55,6 +55,7 @@ clang "$BUILD_COMMIT_FLAG" -target arm64-apple-ios16.0 \
     "$ROOT/LCOrbit/Modules/HiddenBead/FMHiddenBeadModule.m" \
     "$ROOT/LCOrbit/Modules/KeepAlive/FMKeepAlive.m" \
     "$ROOT/LCFloatingMenu/LCFloatingMenu.m" \
+    "$ROOT/LCOrbit/Build/platform_shim.c" \
     -o "$OUT"
 file "$OUT"
 # Pseudo-sign so the artifact exports cleanly; LC re-signs on import anyway.
