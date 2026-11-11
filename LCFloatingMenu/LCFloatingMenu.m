@@ -3911,7 +3911,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
     // Grid rows: columns adapt to the icon-size slider, cells carry a caption.
-    CGFloat gridInner=pw-24,gridGap=8,gridIcon=FMGridIconSize();
+    CGFloat gridInner=pw-24,gridGap=4,gridIcon=FMGridIconSize();
     int gridCols=MAX(2,MIN(8,(int)((gridInner+gridGap)/(gridIcon+gridGap))));
     CGFloat gridCell=gridIcon;
     // Cap at five rows like the list does; more apps scroll.
@@ -4172,9 +4172,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // icon-size slider. Same data source and tap/close handling as the rows.
         UIView *gridGlass=[self.panel viewWithTag:9230];
         CGFloat inner=(gridGlass?gridGlass.bounds.size.width:290)-24;
-        CGFloat icon=FMGridIconSize(),gap=8;
+        CGFloat icon=FMGridIconSize(),gap=4;
         int cols=MAX(2,MIN(8,(int)((inner+gap)/(icon+gap))));
-        CGFloat cellW=inner/(CGFloat)cols,cell=icon;
+        CGFloat pitch=icon+gap,cell=icon;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
@@ -4184,11 +4184,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,icon+8)];
             strip.showsHorizontalScrollIndicator=NO;
             strip.alwaysBounceHorizontal=NO;
-            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(icon+8));
+            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(icon+gap));
             UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,icon)];
             NSUInteger hiddenIndex=0;
             for(NSDictionary *app in hiddenApps) {
-                UIControl *cell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*(icon+8),0,icon,icon)];
+                UIControl *cell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*(icon+gap),0,icon,icon)];
                 UIView *hiddenIcon=[self iconViewForApp:app size:icon];
                 hiddenIcon.frame=cell.bounds;
                 hiddenIcon.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
@@ -4213,13 +4213,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
             for(NSUInteger k=0;k<span;k++) {
                 NSDictionary *app=gridApps[index+k];
-                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(k*cellW,0,cellW,cell)];
+                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(k*pitch,0,pitch,cell)];
                 cellView.backgroundColor=UIColor.clearColor;
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
                 [cellView addSubview:iconView];
                 [NSLayoutConstraint activateConstraints:@[
-                    [iconView.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
+                    [iconView.leadingAnchor constraintEqualToAnchor:cellView.leadingAnchor],
                     [iconView.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
                     [iconView.widthAnchor constraintEqualToConstant:icon],
                     [iconView.heightAnchor constraintEqualToConstant:icon]
@@ -4247,8 +4247,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     // The badge hugs the icon's top-right corner, not the whole cell.
                     [NSLayoutConstraint activateConstraints:@[
-                        [close.trailingAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-2],
+                        [close.trailingAnchor constraintEqualToAnchor:cellView.leadingAnchor
+                            constant:icon-2],
                         [close.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:-2],
                         [close.widthAnchor constraintEqualToConstant:24],
                         [close.heightAnchor constraintEqualToConstant:24]
@@ -7593,15 +7593,15 @@ static UIView *FMDockCard(UIStackView *rows) {
         CGFloat top=_listTop;
         if(_grid) {
             // Two rows of square cells, no captions; columns follow the icon slider.
-            CGFloat size=FMGridIconSize(),cellGap=8;
+            CGFloat size=FMGridIconSize(),cellGap=4;
             int cols=MAX(2,MIN(8,(int)((inner+cellGap)/(size+cellGap))));
-            CGFloat cellW=inner/(CGFloat)cols;
+            CGFloat pitch=size+cellGap;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
                 UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(size+4),inner,size)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *icon=[self iconForSlot:slot size:size apps:apps];
-                    icon.frame=CGRectMake(col*cellW+(cellW-size)*.5,0,size,size);
+                    icon.frame=CGRectMake(col*pitch,0,size,size);
                     [row addSubview:icon];
                 }
                 [_content addSubview:row];
