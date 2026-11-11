@@ -7,8 +7,8 @@
 workflows:
   floating-menu:
     name: Floating Menu dylib
-    # Intel x64 池容量宽裕；arm64 库用 Xcode 交叉编译，与 macOS-13 runner 等价
-    instance_type: mac_mini
+    # Apple Silicon 机型（Codemagic 已淘汰 Intel mac_mini）；Xcode 交叉编译 arm64
+    instance_type: mac_mini_m2
     max_build_duration: 40
     environment:
       xcode: latest
