@@ -211,25 +211,15 @@ static NSString *StringPref(NSString *key,NSString *def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return [v isKindOfClass:NSString.class]?v:def;
 }
-// 展开形式三选一：0=单列列表（默认）1=精简竖条 2=宫格（贴墙外壳，内部网格）。
-// 读不到 menuLayout 时按旧键 compactMode 回退，老用户的设置不丢。
+// 展开形式三选一（menuLayoutV3）：0=单列列表（默认）1=宫格布局 2=单列精简。
+// 旧键 menuLayout 的语义换过一次且被翻转迁移污染过，直接废弃不再读取；
+// 没选过 V3 的按旧键 compactMode 回退（v26 时代的老用户）。
 #define FMLayoutList 0
 #define FMLayoutGrid 1
 #define FMLayoutCompact 2
-static void SetPref(NSString *key,id value);
 static int FMMenuLayout(void) {
-    id v=FMStaged[Pref(@"menuLayout")] ?: [HostDefaults() objectForKey:Pref(@"menuLayout")];
-    if(v) {
-        int raw=Clamp([v intValue],0,2);
-        // The stored value used to mean 1=compact 2=grid; the row now shows
-        // 列表/宫格/精简 in that order, so flip old values exactly once.
-        if(!BoolPref(@"menuLayoutV2",NO)) {
-            raw=raw==0?0:(raw==1?2:1);
-            SetPref(@"menuLayout",@(raw));
-            SetPref(@"menuLayoutV2",@YES);
-        }
-        return raw;
-    }
+    id v=FMStaged[Pref(@"menuLayoutV3")] ?: [HostDefaults() objectForKey:Pref(@"menuLayoutV3")];
+    if(v) return Clamp([v intValue],0,2);
     return BoolPref(@"compactMode",NO)?FMLayoutCompact:FMLayoutList;
 }
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
@@ -5484,7 +5474,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayout",@FMLayoutList);SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -8159,7 +8149,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)addTrayRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupTray;
-    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"宫格布局",@"单列精简"] key:@"menuLayout" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"宫格布局",@"单列精简"] key:@"menuLayoutV3" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:NO] to:rows group:group when:FMDockWhenCompact];
     [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
