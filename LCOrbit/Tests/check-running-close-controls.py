@@ -29,7 +29,7 @@ assert "closePictureInPicture" in compact_footer and "关闭画中画" in compac
 assert "stopPiPIfActive:&error" in src, "PiP close must call the host stop API without terminating a Guest"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
 assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open must not relocate the saved orb"
-assert "CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;" in src, "compact corners must be softer than capsule radius"
+assert "small?(compact?MIN(25,pw*.33):29):32;" in src, "compact corners must be softer than capsule radius"
 assert src.count("10+compactActions*63+3") == 1, "compact panel footer height must reserve the smaller inset"
 assert "CGFloat height=self.panelFooterHeight;" in src, "footer must use fitted panel height"
 assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
