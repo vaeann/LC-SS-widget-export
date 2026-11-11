@@ -55,6 +55,38 @@ jobs:
           path: dist/LCFloatingMenu.dylib
           if-no-files-found: error
           retention-days: 14
+  # Linux cross-compile: the macOS hosted pool is capacity-starved, while
+  # ubuntu runners are never queued. Same sources, LLVM Mach-O toolchain.
+  build-linux:
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain and SDK
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang lld llvm file ldid
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/thsdks
+          cd /tmp/thsdks
+          SDK_DIR=$(git ls-tree -d --name-only HEAD | grep -E '^iPhoneOS1[6-9]' | sort -V | tail -1)
+          test -n "$SDK_DIR"
+          git sparse-checkout set "$SDK_DIR"
+          echo "SDK=/tmp/thsdks/$SDK_DIR" >> "$GITHUB_ENV"
+      - name: Cross-compile arm64 dylib
+        run: |
+          set -euo pipefail
+          LCOrbit/Build/build-linux.sh dist/LCFloatingMenu.dylib
+          file dist/LCFloatingMenu.dylib | grep -q 'Mach-O.*arm64'
+          llvm-otool -D dist/LCFloatingMenu.dylib | grep -Fq '@rpath/LCFloatingMenu.dylib'
+      - name: Upload GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LCFloatingMenu-dylib-linux
+          path: dist/LCFloatingMenu.dylib
+          if-no-files-found: error
+          retention-days: 14
   publish:
     # IMPORTANT: ordinary branch builds MUST NOT touch GitHub Releases.
     if: startsWith(github.ref, 'refs/tags/')
