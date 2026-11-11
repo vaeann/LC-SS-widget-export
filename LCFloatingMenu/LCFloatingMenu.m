@@ -214,11 +214,22 @@ static NSString *StringPref(NSString *key,NSString *def) {
 // 展开形式三选一：0=单列列表（默认）1=精简竖条 2=宫格（贴墙外壳，内部网格）。
 // 读不到 menuLayout 时按旧键 compactMode 回退，老用户的设置不丢。
 #define FMLayoutList 0
-#define FMLayoutCompact 1
-#define FMLayoutGrid 2
+#define FMLayoutGrid 1
+#define FMLayoutCompact 2
+static void SetPref(NSString *key,id value);
 static int FMMenuLayout(void) {
     id v=FMStaged[Pref(@"menuLayout")] ?: [HostDefaults() objectForKey:Pref(@"menuLayout")];
-    if(v) return Clamp([v intValue],0,2);
+    if(v) {
+        int raw=Clamp([v intValue],0,2);
+        // The stored value used to mean 1=compact 2=grid; the row now shows
+        // 列表/宫格/精简 in that order, so flip old values exactly once.
+        if(!BoolPref(@"menuLayoutV2",NO)) {
+            raw=raw==0?0:(raw==1?2:1);
+            SetPref(@"menuLayout",@(raw));
+            SetPref(@"menuLayoutV2",@YES);
+        }
+        return raw;
+    }
     return BoolPref(@"compactMode",NO)?FMLayoutCompact:FMLayoutList;
 }
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
@@ -3906,7 +3917,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     CGFloat gridInner=pw-24,gridGap=8,gridIcon=FMGridIconSize();
     int gridCols=MAX(2,MIN(8,(int)((gridInner+gridGap)/(gridIcon+gridGap))));
     CGFloat gridCell=gridIcon;
-    NSUInteger gridRows=MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols);
+    // Cap at five rows like the list does; more apps scroll.
+    NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
     CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
@@ -4537,8 +4549,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     CGFloat w=glass.bounds.size.width;
     CGFloat height=self.panelFooterHeight;
+    // The footer sits exactly where buildPanel reserved room for it
+    // (bottom = footer + 6 + extension), so stretching the shell moves it too
+    // instead of leaving it stranded at a fixed 28pt.
+    CGFloat extension=FMMenuStyleValue(@"menuExtension")*(compact?22./28:1.);
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:12,
-                       glass.bounds.size.height-height-6-(compact?22:28),w-(compact?6:24),height)];
+                       glass.bounds.size.height-height-6-extension,w-(compact?6:24),height)];
     footer.backgroundColor=UIColor.clearColor;
     footer.tag=9232; // The drawer pop-in animates its buttons one by one.
     [FMGlassContent(glass) addSubview:footer];
@@ -7611,7 +7627,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         }
         [glyphs addObject:@"gearshape.fill"];
         [glyphs addObject:_left?@"chevron.compact.left":@"chevron.compact.right"];
-        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-44-6-28,inner,44)];
+        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-44-6-shoulder,inner,44)];
         [_content addSubview:bar];
         CGFloat slot=bar.bounds.size.width/glyphs.count;
         for(NSUInteger index=0;index<glyphs.count;index++) {
@@ -8143,7 +8159,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)addTrayRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupTray;
-    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"精简竖条",@"宫格"] key:@"menuLayout" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"宫格布局",@"单列精简"] key:@"menuLayout" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:NO] to:rows group:group when:FMDockWhenCompact];
     [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
