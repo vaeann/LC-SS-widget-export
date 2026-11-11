@@ -25,7 +25,7 @@ jobs:
   build:
     # macOS pool is capacity-starved; release builds (tags) only, so branch
     # pushes never block the concurrency group behind a queued macos job.
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     timeout-minutes: 60
     steps:

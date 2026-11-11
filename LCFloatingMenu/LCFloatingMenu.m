@@ -487,6 +487,7 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
         @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
         @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1},
+        @{@"key":@"menuGridIconSize",@"title":@"宫格图标大小",@"min":@(24),"max":@(60),"default":@(42),"unit":@"点","step":@(1)},
         // On top of whatever the head needs cleared, none of it by default; below zero it
         // lifts the whole block instead, as far as the top edge.
         @{@"key":@"menuTopPadding",@"title":@"上方留白",@"min":@(-16),@"max":@40,@"default":@0,@"unit":@"点",@"step":@1}
