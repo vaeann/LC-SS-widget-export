@@ -47,5 +47,6 @@ xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Wno-unused-parameter \
     "$ROOT/LCOrbit/Core/LCOrbitGuestService.m" "$WORK/menu.m" \
     "$ROOT/LCOrbit/Core/LCOrbitMultitask.m" \
     "$ROOT/LCOrbit/Core/LCOrbitStorage.m" \
+    "$ROOT/LCOrbit/Tests/Stubs/UIKitStubs.m" \
     -o "$WORK/guest-tests"
 "$WORK/guest-tests"

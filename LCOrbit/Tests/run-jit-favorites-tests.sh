@@ -57,5 +57,6 @@ xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Werror \
     "$SOURCE_ROOT/LCOrbit/Core/LCOrbitGuestService.m" "$WORK/menu.m" \
     "$SOURCE_ROOT/LCOrbit/Core/LCOrbitMultitask.m" \
     "$SOURCE_ROOT/LCOrbit/Core/LCOrbitStorage.m" \
+    "$ROOT/LCOrbit/Tests/Stubs/UIKitStubs.m" \
     -o "$WORK/favorite-tests"
 "$WORK/favorite-tests"

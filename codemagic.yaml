@@ -15,6 +15,7 @@ workflows:
     scripts:
       - name: Build arm64 dylib and verify
         script: |
+          set -e
           cd $CM_BUILD_DIR
           LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
           LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib

@@ -17,5 +17,6 @@ xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Wno-unused-parameter \
     "$ROOT/LCOrbit/Core/LCOrbitStorage.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m" \
+    "$ROOT/LCOrbit/Tests/Stubs/UIKitStubs.m" \
     -o "$WORK/center-tests"
 "$WORK/center-tests" "$WORK/A.dylib" "$WORK/B.dylib"

@@ -9,5 +9,6 @@ if test -f "$ROOT/LCOrbit/Core/LCOrbitMultitask.m"; then
 fi
 xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Wno-unused-parameter \
     -framework Foundation -I "$ROOT/LCOrbit/Tests/Stubs" -I "$ROOT/LCOrbit/Core" \
+    "$ROOT/LCOrbit/Tests/Stubs/UIKitStubs.m" \
     "$@" "$ROOT/LCOrbit/Core/LCOrbitStorage.m" -o "$WORK/multitask-tests"
 LC_HOME_PATH="$WORK/host" "$WORK/multitask-tests"
