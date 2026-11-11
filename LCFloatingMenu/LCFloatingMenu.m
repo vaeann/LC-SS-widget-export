@@ -211,7 +211,7 @@ static NSString *StringPref(NSString *key,NSString *def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return [v isKindOfClass:NSString.class]?v:def;
 }
-// 展开形式三选一：0=单列列表（默认）1=精简竖条 2=宫格卡片。
+// 展开形式三选一：0=单列列表（默认）1=精简竖条 2=宫格（贴墙外壳，内部网格）。
 // 读不到 menuLayout 时按旧键 compactMode 回退，老用户的设置不丢。
 #define FMLayoutList 0
 #define FMLayoutCompact 1
@@ -222,11 +222,6 @@ static int FMMenuLayout(void) {
     return BoolPref(@"compactMode",NO)?FMLayoutCompact:FMLayoutList;
 }
 static BOOL FMMenuGrid(void) { return FMMenuLayout()==FMLayoutGrid; }
-static int FMGridColumns(void) {
-    id v=FMStaged[Pref(@"menuGridColumns")] ?: [HostDefaults() objectForKey:Pref(@"menuGridColumns")];
-    int n=v?[v intValue]:4;
-    return n==5?5:4;
-}
 static CGFloat FMGridIconSize(void) {
     return Clamp(FloatPref(@"menuGridIconSize",40),24,64);
 }
@@ -2075,11 +2070,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     FMNotchParams _morphBead,_morphDroplet,_morphDrawer;
     CGPoint _morphRestCenter,_morphShift;
     CGFloat _morphProgress,_morphVelocity,_morphTarget,_morphTravel,_morphCommit;
-    // Centered grid card morph: lerp the rounded rect from the bead's bounding
-    // frame to the card frame; no notch geometry is involved.
-    BOOL _morphGrid;
-    CGRect _morphGridBeadFrame;
-    CGFloat _morphGridRadius,_morphGridFromRadius;
     // Outline rate limiting: when the last exact outline was made, the progress it was made
     // at, how much overshoot the transform already carries, and the tick itself.
     CFTimeInterval _morphFrameAt,_morphFrameTick;
@@ -2724,7 +2714,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         // With Reduce Motion nothing follows the finger: a long enough pull
         // opens the drawer once it is let go.
         _panUsesDroplet=BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
-        _panUsesMorph=!_panUsesDroplet && !FMMenuGrid() && !UIAccessibilityIsReduceMotionEnabled();
+        _panUsesMorph=!_panUsesDroplet && !UIAccessibilityIsReduceMotionEnabled();
         [self.orb.layer removeAllAnimations];
         UIView *glass=[self.orb viewWithTag:9202];
         [glass.layer.mask removeAnimationForKey:@"fm.droplet.return"];
@@ -2980,28 +2970,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *panel=self.panel,*glass=[panel viewWithTag:9230],*orb=self.orb;
     CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
     if(!panel || !orb || !self.window || ![clip isKindOfClass:CAShapeLayer.class]) return NO;
-    if(FMMenuGrid()) {
-        CGFloat scale=panel.transform.a;
-        if(!isfinite(scale) || scale<=0) return NO;
-        CGRect beadFrame=[orb convertRect:orb.bounds toView:panel];
-        _morphScale=scale;
-        _morphRestCenter=panel.center;
-        CGPoint beadCenter=CGPointMake(CGRectGetMidX(beadFrame),CGRectGetMidY(beadFrame));
-        CGPoint cardCenter=CGPointMake(CGRectGetWidth(glass.bounds)*.5,CGRectGetHeight(glass.bounds)*.5);
-        _morphShift=CGPointMake(beadCenter.x-cardCenter.x,beadCenter.y-cardCenter.y);
-        _morphGrid=YES;
-        _morphGridBeadFrame=beadFrame;
-        _morphGridRadius=MIN(FMMenuStyleValue(@"menuCornerRadius"),CGRectGetWidth(glass.bounds)*.2);
-        _morphGridFromRadius=MIN(CGRectGetWidth(beadFrame),CGRectGetHeight(beadFrame))*.5;
-        _morphCompact=NO;
-        _morphTravel=MAX(20.,hypot(beadCenter.x-cardCenter.x,beadCenter.y-cardCenter.y));
-        _morphCommit=0;   // The centered card opens by tap; drag-to-scrub is edge-only.
-        _morphBeadAlpha=self.orbUpdateAvailable?1:(self.orbNormalAlpha?:.72);
-        _morphFrameAt=0;_morphShownT=0;_morphShownStretch=0;
-        CGFloat maximum=UIScreen.mainScreen.maximumFramesPerSecond;
-        _morphFrameTick=maximum>90?1./maximum+.0005:1./60.+.0005;
-        return YES;
-    }
     CGFloat scale=panel.transform.a;
     if(!isfinite(scale) || scale<=0) return NO;
     CGFloat unit=1/scale;
@@ -3040,44 +3008,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *panel=self.panel,*glass=[panel viewWithTag:9230];
     CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
     if(!panel || ![clip isKindOfClass:CAShapeLayer.class]) return;
-    if(_morphGrid) {
-        // The grid morph lerps a plain rounded rect from the bead's bounding
-        // frame to the card frame; no notch Bezier is rebuilt per frame.
-        CGFloat raw=MAX(progress,0),t=MIN(raw,1);
-        _morphProgress=raw;
-        CGRect from=_morphGridBeadFrame;
-        CGRect to=CGRectMake(0,0,glass.bounds.size.width,glass.bounds.size.height);
-        CGRect frame=CGRectMake(from.origin.x+(to.origin.x-from.origin.x)*t,
-                                from.origin.y+(to.origin.y-from.origin.y)*t,
-                                from.size.width+(to.size.width-from.size.width)*t,
-                                from.size.height+(to.size.height-from.size.height)*t);
-        CGFloat radius=_morphGridFromRadius+(_morphGridRadius-_morphGridFromRadius)*t;
-        __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
-            [UIBezierPath bezierPathWithRoundedRect:frame cornerRadius:radius];
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        clip.path=outline.CGPath;
-        for(CALayer *layer in glass.layer.sublayers)
-            if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
-                ((CAShapeLayer *)layer).path=outline.CGPath;
-        panel.layer.shadowPath=outline.CGPath;
-        panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t),
-                                 _morphRestCenter.y+_morphShift.y*(1-t));
-        [CATransaction commit];
-        _morphShownT=t;_morphShownStretch=0;
-        BOOL reveal=_popRevealed?t>=.42:t>=.5,flipped=reveal!=_popRevealed;
-        _popRevealed=reveal;
-        if(reveal) _popStarted=YES;
-        if(flipped) {
-            for(UIView *child in FMGlassContent(glass).subviews)
-                if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
-            [self popContent:reveal];
-        }
-        [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
-        self.dismissLayer.alpha=FMSmooth(t);
-        self.orb.alpha=_morphBeadAlpha*(1-FMSmooth(t/.3));
-        return;
-    }
     // The outline stops at fully open; progress beyond 1 (a spring overshooting
     // or a finger pulling past the end) shows as a stretch toward the screen.
     CGFloat raw=MAX(progress,0),t=MIN(raw,1),stretch=Clamp(raw-1,0,.08);
@@ -3939,9 +3869,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Keep the 63pt logical row hit region even when users choose 50% visual scale.
     UIEdgeInsets safe=self.window.safeAreaInsets;
     CGFloat usableWidth=bounds.size.width-safe.left-safe.right;
-    // Grid: a centered square. Side adapts to the scene, the list scrolls inside.
-    CGFloat gridSide=MIN(MIN(usableWidth,bounds.size.height-safeTop-safeBottom)-28.,460.);
-    CGFloat pw=MIN(small?(compact?76:(grid?gridSide:240)):346,usableWidth-24);
+    // Grid: same edge-docked shell as the list, a bit wider so columns breathe.
+    CGFloat pw=MIN(small?(compact?76:(grid?290:240)):346,usableWidth-24);
     if(pw<=0) return;
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
@@ -3973,14 +3902,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
-    // Grid: the card is a centered square; the app grid scrolls inside it.
-    CGFloat target=small?(grid?gridSide:(compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
+    // Grid rows: columns adapt to the icon-size slider, cells carry a caption.
+    CGFloat gridInner=pw-24,gridGap=8,gridIcon=FMGridIconSize();
+    int gridCols=MAX(2,MIN(8,(int)((gridInner+gridGap)/(gridIcon+gridGap))));
+    CGFloat gridCell=gridIcon+20;
+    NSUInteger gridRows=MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols);
+    CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+4):
+        (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
-    if(small) target=MAX(target,top+bottom+(compact?63:[self appRowHeight]));
+    if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell:[self appRowHeight])));
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available/actualScale,target);
-    if(grid) ph=MIN(available/actualScale,gridSide);   // 正方形不被 target 拉长
     if(!isfinite(ph) || ph<=0 || !isfinite(pw) || pw<=0) return;
     if(hostUI && small) {
         FMLog(@"panel-layout",[NSString stringWithFormat:@"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu",
@@ -3989,13 +3922,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     CGFloat visualW=pw*actualScale, visualH=ph*actualScale;
     CGFloat edgeInset=(self.left?safe.left:safe.right)+(small?0:10);
-    // Grid floats dead center of the scene, clear of the docking wall.
-    CGFloat centerX=grid?(bounds.size.width-edgeInset*.5)/2:
-        (self.left?(edgeInset+visualW*.5):(bounds.size.width-edgeInset-visualW*.5));
-    CGFloat topY=grid?MAX(safeTop,(bounds.size.height-safeBottom-visualH)*.5):
-        (small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
+    CGFloat centerX=self.left?(edgeInset+visualW*.5):(bounds.size.width-edgeInset-visualW*.5);
+    CGFloat topY=small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
                           safeTop,bounds.size.height-safeBottom-visualH)
-                   :safeTop+(available-visualH)*.5);
+                   :safeTop+(available-visualH)*.5;
     CGFloat centerY=topY+visualH*.5;
     UIControl *under=[[UIControl alloc] initWithFrame:bounds];
     under.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:.06];
@@ -4015,13 +3945,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [shadow addGestureRecognizer:settingsHold];
         shadow.accessibilityHint=@"长按打开微珠菜单设置";
         // Dragging the drawer toward its docking edge closes it with the finger.
-        // The centered grid card has no docking edge, so no edge-pan there.
-        if(!grid) {
-            UIPanGestureRecognizer *edgePan=[[UIPanGestureRecognizer alloc] initWithTarget:self
-                                                                                    action:@selector(panelPan:)];
-            edgePan.delegate=self;
-            [shadow addGestureRecognizer:edgePan];
-        }
+        UIPanGestureRecognizer *edgePan=[[UIPanGestureRecognizer alloc] initWithTarget:self
+                                                                                action:@selector(panelPan:)];
+        edgePan.delegate=self;
+        [shadow addGestureRecognizer:edgePan];
     }
     BOOL night=FMMenuDark();
     UIColor *shadowTint=UIColor.blackColor;
@@ -4029,23 +3956,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     shadow.layer.shadowOpacity=small?(night?.30:.18):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
-    // Grid keeps its own rounded-rect silhouette; the side-notch silhouette
-    // (wall flares + bead cradle) belongs to the two edge-docked layouts only.
-    CGFloat radius=grid?MIN(FMMenuStyleValue(@"menuCornerRadius"),pw*.2):small?(compact?MIN(25,pw*.33):29):32;
+    CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     glass.tag=9230; // The drawer morph reshapes this view's clip, rim and shadow.
-    if(grid) {
-        // No side-notch rim; a plain hairline follows the rounded square.
-        glass.layer.borderWidth=1;
-        glass.layer.borderColor=[FMThemeColor(FMColorSecondary) colorWithAlphaComponent:.45].CGColor;
-        // The morph reshapes this clip every frame, so the grid needs a shape
-        // mask too (the two edge-docked layouts get theirs from the notch).
-                CAShapeLayer *gridMask=[CAShapeLayer layer];
-        gridMask.path=[UIBezierPath bezierPathWithRoundedRect:glass.bounds
-            cornerRadius:MIN(FMMenuStyleValue(@"menuCornerRadius"),glass.bounds.size.width*.2)].CGPath;
-        glass.layer.mask=gridMask;
-    }
-    if(small && !grid) {
+    if(small) {
         FMAddOrbBackdrop(shadow,self.left);
         FMApplySideNotch(glass,shadow.layer,self.left,compact,NO);
         for(CALayer *layer in glass.layer.sublayers)
@@ -4053,8 +3967,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     [shadow addSubview:glass];
     // The native material supplies depth; the shared notch adds only its rim.
-    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:
-        grid?CGRectInset(glass.bounds,10,10):CGRectInset(glass.bounds,14,14)];
+    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
@@ -4063,8 +3976,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(self.panelShowsHeader) [self buildAppHeader:glass];
-        scroll.frame=grid?CGRectMake(10,top,pw-20,ph-top-bottom):
-            CGRectMake(compact?3:12,top,pw-(compact?6:24),ph-top-bottom);
+        scroll.frame=CGRectMake(compact?3:12,top,pw-(compact?6:24),ph-top-bottom);
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
@@ -4247,13 +4159,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
 
     if(FMMenuGrid()) {
-        // Grid layout: fixed columns of square icon cells, no captions.
-        // Same data source and tap/close handling as the compact rows.
-        int cols=FMGridColumns();
+        // Grid layout: square icon cells with a caption; columns adapt to the
+        // icon-size slider. Same data source and tap/close handling as the rows.
         UIView *gridGlass=[self.panel viewWithTag:9230];
-        CGFloat inner=((gridGlass?gridGlass.bounds.size.width:240)-20);
-        CGFloat cell=inner/(CGFloat)cols;
-        CGFloat icon=FMGridIconSize();
+        CGFloat inner=(gridGlass?gridGlass.bounds.size.width:290)-24;
+        CGFloat icon=FMGridIconSize(),gap=8;
+        int cols=MAX(2,MIN(8,(int)((inner+gap)/(icon+gap))));
+        CGFloat cellW=inner/(CGFloat)cols,cell=icon+20;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
@@ -4271,11 +4183,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
                 [cellView addSubview:iconView];
+                UILabel *caption=[[FMManager shared] label:FMAppCaption(app) size:11
+                                                    weight:UIFontWeightMedium];
+                caption.numberOfLines=1;
+                caption.lineBreakMode=NSLineBreakByTruncatingTail;
+                caption.textAlignment=NSTextAlignmentCenter;
+                caption.translatesAutoresizingMaskIntoConstraints=NO;
+                [cellView addSubview:caption];
                 [NSLayoutConstraint activateConstraints:@[
                     [iconView.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
-                    [iconView.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
+                    [iconView.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:0],
                     [iconView.widthAnchor constraintEqualToConstant:icon],
-                    [iconView.heightAnchor constraintEqualToConstant:icon]
+                    [iconView.heightAnchor constraintEqualToConstant:icon],
+                    [caption.topAnchor constraintEqualToAnchor:iconView.bottomAnchor constant:3],
+                    [caption.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor],
+                    [caption.widthAnchor constraintLessThanOrEqualToAnchor:cellView.widthAnchor
+                        constant:-4]
                 ]];
                 cellView.accessibilityLabel=FMAppCaption(app);
                 cellView.accessibilityTraits=UIAccessibilityTraitButton;
@@ -4298,9 +4221,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [close addTarget:self action:@selector(closeTaskFromButton:)
                         forControlEvents:UIControlEventTouchUpInside];
                     [cellView addSubview:close];
+                    // The badge hugs the icon's top-right corner, not the whole cell.
                     [NSLayoutConstraint activateConstraints:@[
-                        [close.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor constant:-2],
-                        [close.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:2],
+                        [close.trailingAnchor constraintEqualToAnchor:cellView.centerXAnchor
+                            constant:icon*.5-2],
+                        [close.topAnchor constraintEqualToAnchor:cellView.topAnchor constant:-2],
                         [close.widthAnchor constraintEqualToConstant:24],
                         [close.heightAnchor constraintEqualToConstant:24]
                     ]];
@@ -5554,7 +5479,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayout",@FMLayoutList);SetPref(@"menuGridColumns",@4);SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayout",@FMLayoutList);SetPref(@"menuGridIconSize",@(40.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -7408,7 +7333,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
     NSArray<NSDictionary *> *_favorites;
-    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled;
+    BOOL _dirty,_placed,_left,_compact,_grid,_open,_revealed,_started,_faded,_rebuildScheduled;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
@@ -7475,12 +7400,13 @@ static UIView *FMDockCard(UIStackView *rows) {
     FMManager *manager=[FMManager shared];
     _left=BoolPref(@"onLeft",manager.left);
     _compact=FMMenuLayout()==FMLayoutCompact;
+    _grid=FMMenuGrid();
     _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
     CGFloat headroom=[manager menuHeadroom:_compact];
-    CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
+    CGFloat rowHeight=_compact?63:(_grid?FMGridIconSize()+20:MAX(56,48/MAX(.50,_actual)));
     CGFloat footer=_compact?76:44;
-    _pw=_compact?76:240;
+    _pw=_compact?76:(_grid?290:240);
     NSArray<NSDictionary *> *pinned=[manager pinnedApps];
     if(!pinned.count) {
         NSArray<NSDictionary *> *allApps=[manager orderedAppsForMenu];
@@ -7489,7 +7415,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _favorites=_compact?@[]:pinned;
     _headroom=headroom;
     _listTop=headroom+(_compact?0:[manager menuHeaderDepth]);
-    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:3*(rowHeight+4));
+    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:(_grid?2*(rowHeight+4):3*(rowHeight+4)));
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
     if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
@@ -7587,7 +7513,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [tile addSubview:glyph];
     return tile;
 }
-// Three apps (a strip of favorites on top in the list layout), the footer buttons and
+// List rows or grid cells (a strip of favorites on top in both), the footer buttons and
 // the dividers, at the positions buildPanel and its helpers give them.
 - (void)buildContents {
     FMManager *manager=[FMManager shared];
@@ -7641,28 +7567,55 @@ static UIView *FMDockCard(UIStackView *rows) {
         UIView *divider=FMMakeGlowSeparator(CGRectMake(12,_headroom+50,inner,1.0));
         [_content addSubview:divider];
         [dividers addObject:divider];
-        CGFloat top=_listTop,rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
-        for(NSUInteger index=0;index<3;index++) {
-            UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+index*(rowHeight+4),inner,rowHeight)];
-            row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
-                FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
-            row.layer.cornerRadius=17;
-            UIView *icon=[self iconForSlot:index size:size apps:apps];
-            icon.frame=CGRectMake(12,(rowHeight-size)*.5,size,size);
-            [row addSubview:icon];
-            NSString *name=index<apps.count?FMAppCaption(apps[index]):[NSString stringWithFormat:@"应用 %lu",(unsigned long)index+1];
-            UILabel *title=[manager label:name size:13 weight:UIFontWeightSemibold];
-            title.numberOfLines=1;
-            title.lineBreakMode=NSLineBreakByTruncatingTail;
-            title.frame=CGRectMake(12+size+8,0,inner-12-size-8-26,rowHeight);
-            [row addSubview:title];
-            UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-            arrow.tintColor=FMThemeColor(FMColorText);
-            arrow.contentMode=UIViewContentModeScaleAspectFit;
-            arrow.frame=CGRectMake(inner-4-18,(rowHeight-18)*.5,18,18);
-            [row addSubview:arrow];
-            [_content addSubview:row];
-            [items addObject:row];
+        CGFloat top=_listTop;
+        if(_grid) {
+            // Two rows of square cells with captions; columns follow the icon slider.
+            CGFloat size=FMGridIconSize(),cellGap=8;
+            int cols=MAX(2,MIN(8,(int)((inner+cellGap)/(size+cellGap))));
+            CGFloat cellW=inner/(CGFloat)cols,cellH=size+20;
+            for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cellH+4),inner,cellH)];
+                for(int col=0;col<cols;col++) {
+                    NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
+                    UIView *icon=[self iconForSlot:slot size:size apps:apps];
+                    icon.frame=CGRectMake((cellW-size)*.5,0,size,size);
+                    [row addSubview:icon];
+                    if(slot<apps.count) {
+                        UILabel *title=[manager label:FMAppCaption(apps[slot]) size:11 weight:UIFontWeightMedium];
+                        title.numberOfLines=1;
+                        title.lineBreakMode=NSLineBreakByTruncatingTail;
+                        title.textAlignment=NSTextAlignmentCenter;
+                        title.frame=CGRectMake(0,cellH-16,cellW,14);
+                        [row addSubview:title];
+                    }
+                }
+                [_content addSubview:row];
+                [items addObject:row];
+            }
+        } else {
+            CGFloat rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
+            for(NSUInteger index=0;index<3;index++) {
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+index*(rowHeight+4),inner,rowHeight)];
+                row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
+                    FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
+                row.layer.cornerRadius=17;
+                UIView *icon=[self iconForSlot:index size:size apps:apps];
+                icon.frame=CGRectMake(12,(rowHeight-size)*.5,size,size);
+                [row addSubview:icon];
+                NSString *name=index<apps.count?FMAppCaption(apps[index]):[NSString stringWithFormat:@"应用 %lu",(unsigned long)index+1];
+                UILabel *title=[manager label:name size:13 weight:UIFontWeightSemibold];
+                title.numberOfLines=1;
+                title.lineBreakMode=NSLineBreakByTruncatingTail;
+                title.frame=CGRectMake(12+size+8,0,inner-12-size-8-26,rowHeight);
+                [row addSubview:title];
+                UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+                arrow.tintColor=FMThemeColor(FMColorText);
+                arrow.contentMode=UIViewContentModeScaleAspectFit;
+                arrow.frame=CGRectMake(inner-4-18,(rowHeight-18)*.5,18,18);
+                [row addSubview:arrow];
+                [_content addSubview:row];
+                [items addObject:row];
+            }
         }
         UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-44-6-28,inner,44)];
         [_content addSubview:bar];
@@ -8197,8 +8150,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)addTrayRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupTray;
-    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"精简竖条",@"宫格卡片"] key:@"menuLayout" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
-    [self add:[self segmentRow:@"宫格列数" items:@[@"4 列",@"5 列"] key:@"menuGridColumns" selected:FMGridColumns()-4] to:rows group:group when:FMDockWhenGrid];
+    [self add:[self segmentRow:@"展开形式" items:@[@"单列列表",@"精简竖条",@"宫格"] key:@"menuLayout" selected:FMMenuLayout()] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:NO] to:rows group:group when:FMDockWhenCompact];
     [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
@@ -8210,7 +8162,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     // The two layouts each keep their own icon size; only the one in use shows.
     [self addSlider:FMDockOption(@"menuCompactIconSize",@"图标大小") to:rows group:group when:FMDockWhenCompact];
     [self addSlider:FMDockOption(@"menuListIconSize",@"图标大小") to:rows group:group when:FMDockWhenList];
-    [self addSlider:FMDockOption(@"menuGridIconSize",@"宫格图标大小") to:rows group:group when:FMDockWhenGrid];
+    [self addSlider:FMDockOption(@"menuGridIconSize",@"图标大小") to:rows group:group when:FMDockWhenGrid];
     [self add:[self segmentRow:@"弹出动画" items:@[@"逐个",@"一起",@"关"] key:@"popAnimation" selected:FMPopMode()]
            to:rows group:group when:FMDockWhenAlways];
     if(@available(iOS 26.0,*)) {
