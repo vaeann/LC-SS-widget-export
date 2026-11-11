@@ -395,8 +395,14 @@ static UIColor *FMAccentFor(BOOL dark) {
 }
 // Theme math lives in LCOrbitStorage so the module pages and entry rows
 // share the exact same palette (custom accent mixing included).
+// The local FMColorRole keeps every legacy call site untouched; its member
+// order must stay identical to LCOrbitColorRole in LCOrbitStorage.h.
+typedef NS_ENUM(NSUInteger, FMColorRole) {
+    FMColorAccent, FMColorText, FMColorSecondary, FMColorBackground,
+    FMColorSurface, FMColorGlass, FMColorRow, FMColorTool, FMColorBorder
+};
 static UIColor *FMThemeColor(FMColorRole role) {
-    return [LCOrbitStorage themeColorForRole:role dark:FMMenuDark()];
+    return [LCOrbitStorage themeColorForRole:(LCOrbitColorRole)role dark:FMMenuDark()];
 }
 static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
 static UIColor *FMSwitchGreen(void) {
