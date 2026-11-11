@@ -67,7 +67,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -q
-          sudo apt-get install -y -q clang lld llvm file ldid
+          sudo apt-get install -y -q clang lld llvm file
+          # ldid is not packaged for Ubuntu; use the Procursus static release.
+          curl -sL -o /tmp/ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64
+          chmod +x /tmp/ldid
+          echo "LDID=/tmp/ldid" >> "$GITHUB_ENV"
           git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/thsdks
           cd /tmp/thsdks
           SDK_DIR=$(git ls-tree -d --name-only HEAD | grep -E '^iPhoneOS1[6-9]' | sort -V | tail -1)
