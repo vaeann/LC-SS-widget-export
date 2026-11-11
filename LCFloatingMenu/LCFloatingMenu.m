@@ -172,7 +172,9 @@ static LCOrbitPreferences *HostDefaults(void) {
 static void FMBeginPreferenceSnapshot(void) {
     if(FMSnapshotDepth++) return;
     FMSnapshot=[FMPreferenceSnapshot new];
-    FMSnapshot.values=[LCOrbitStorage preferences];
+    // dictionaryRepresentation is required here: the property is declared
+    // copy, and LCOrbitPreferences does not implement NSCopying.
+    FMSnapshot.values=[[LCOrbitStorage preferences] dictionaryRepresentation];
 }
 static void FMEndPreferenceSnapshot(void) {
     if(FMSnapshotDepth && !--FMSnapshotDepth) FMSnapshot=nil;
