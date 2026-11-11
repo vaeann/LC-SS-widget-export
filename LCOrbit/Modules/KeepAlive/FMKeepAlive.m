@@ -72,24 +72,16 @@ static void FMKRefresh(void);   // 前置声明：播放决策在多处被调用
 // 外观偏好 appearanceMode：0 跟随系统 / 1 浅色 / 2 深色（与上游同键同语义）。
 // 跟随系统时返回动态色，交给 trait 解析；强制模式返回固定色。
 static UIColor *FMKThemeColor(BOOL secondary) {
-    NSInteger mode = [[LCOrbitStorage objectForKey:@"appearanceMode" module:kModuleName] integerValue];
-    BOOL forceDark = (mode == 2);
-    BOOL forceLight = (mode == 1);
-    UIColor *dark = [UIColor colorWithRed:(secondary ? 0xC3 : 0xF3) / 255.0
-                                    green:(secondary ? 0xCE : 0xF7) / 255.0
-                                     blue:(secondary ? 0xDE : 0xFF) / 255.0
-                                    alpha:1.0];
-    UIColor *light = [UIColor colorWithRed:(secondary ? 0x4B : 0x18) / 255.0
-                                     green:(secondary ? 0x5B : 0x26) / 255.0
-                                      blue:(secondary ? 0x6C : 0x38) / 255.0
-                                     alpha:1.0];
-    if(forceDark) return dark;
-    if(forceLight) return light;
+    // 色值走 Core 主题（自定义 accent 混合 + 彩蛋 + 日夜间），与主面板完全同源。
+    LCOrbitColorRole role=secondary?LCOrbitColorSecondary:LCOrbitColorText;
+    NSInteger mode=[[LCOrbitStorage objectForKey:@"appearanceMode" module:kModuleName] integerValue];
+    if(mode==1) return [LCOrbitStorage themeColorForRole:role dark:NO];
+    if(mode==2) return [LCOrbitStorage themeColorForRole:role dark:YES];
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        return traits.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light;
+        return [LCOrbitStorage themeColorForRole:role
+                                            dark:traits.userInterfaceStyle==UIUserInterfaceStyleDark];
     }];
 }
-
 static void FMKLog(NSString *event, id details) {
     [LCOrbitLog appendEvent:event details:details kind:@"runtime"];
 }
@@ -708,17 +700,16 @@ static void FMKeepAliveInit(void) {
 // 系统 grouped 背景色（同微珠模块的写法：这个 SDK 里 systemGroupedBackground
 // 取不到，用动态色合成）。
 static UIColor *FMKGroupedBackground(BOOL secondary) {
+    // 背景与主设置页同源：自定义色混合的 Background/Surface，不再用系统 grouped 灰。
+    LCOrbitColorRole role=secondary?LCOrbitColorSurface:LCOrbitColorBackground;
+    NSInteger mode=[[LCOrbitStorage objectForKey:@"appearanceMode" module:kModuleName] integerValue];
+    if(mode==1) return [LCOrbitStorage themeColorForRole:role dark:NO];
+    if(mode==2) return [LCOrbitStorage themeColorForRole:role dark:YES];
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        BOOL dark = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-        if(secondary) {
-            return dark ? [UIColor colorWithWhite:0.11 alpha:1.0]
-                        : [UIColor colorWithWhite:1.00 alpha:1.0];
-        }
-        return dark ? [UIColor colorWithWhite:0.00 alpha:1.0]
-                    : [UIColor colorWithWhite:0.949 alpha:1.0];
+        return [LCOrbitStorage themeColorForRole:role
+                                            dark:traits.userInterfaceStyle==UIUserInterfaceStyleDark];
     }];
 }
-
 @interface FMKeepAliveController : UITableViewController
 - (void)closeTapped;
 - (void)configureStateCell:(UITableViewCell *)cell atRow:(NSInteger)row;

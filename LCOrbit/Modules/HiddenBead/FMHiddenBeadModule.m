@@ -56,41 +56,32 @@ static CGFloat FMGClamp(CGFloat value, CGFloat low, CGFloat high) {    return va
 //   secondary: 浅色 #FFFFFF / 深色 #1C1C1E
 //   primary:   浅色 #F2F2F7 / 深色 #000000
 static UIColor *FMGroupedBackground(BOOL secondary) {
+    // 背景与主设置页同源：自定义色混合的 Background/Surface，不再用系统 grouped 灰。
+    LCOrbitColorRole role=secondary?LCOrbitColorSurface:LCOrbitColorBackground;
+    NSInteger mode=[[LCOrbitStorage objectForKey:@"appearanceMode" module:kFMModuleName] integerValue];
+    if(mode==1) return [LCOrbitStorage themeColorForRole:role dark:NO];
+    if(mode==2) return [LCOrbitStorage themeColorForRole:role dark:YES];
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        BOOL dark = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-        if(secondary) {
-            return dark ? [UIColor colorWithWhite:0.11 alpha:1.0]
-                        : [UIColor colorWithWhite:1.00 alpha:1.0];
-        }
-        return dark ? [UIColor colorWithWhite:0.00 alpha:1.0]
-                    : [UIColor colorWithWhite:0.949 alpha:1.0];
+        return [LCOrbitStorage themeColorForRole:role
+                                            dark:traits.userInterfaceStyle==UIUserInterfaceStyleDark];
     }];
 }
-
 // 与上游 FMThemeColor(FMColorText/FMColorSecondary) 完全对齐的配色：
 //   文字   深色 #F3F7FF / 浅色 #182638
 //   次要   深色 #C3CEDE / 浅色 #4B5B6C
 // 外观偏好 appearanceMode：0 跟随系统 / 1 浅色 / 2 深色（与上游同键同语义）。
 // 跟随系统时返回动态色，交给 trait 解析；强制模式返回固定色。
 static UIColor *FMBeadThemeColor(BOOL secondary) {
-    NSInteger mode = [[LCOrbitStorage objectForKey:@"appearanceMode" module:kFMModuleName] integerValue];
-    BOOL forceDark = (mode == 2);
-    BOOL forceLight = (mode == 1);
-    UIColor *dark = [UIColor colorWithRed:(secondary ? 0xC3 : 0xF3) / 255.0
-                                    green:(secondary ? 0xCE : 0xF7) / 255.0
-                                     blue:(secondary ? 0xDE : 0xFF) / 255.0
-                                    alpha:1.0];
-    UIColor *light = [UIColor colorWithRed:(secondary ? 0x4B : 0x18) / 255.0
-                                     green:(secondary ? 0x5B : 0x26) / 255.0
-                                      blue:(secondary ? 0x6C : 0x38) / 255.0
-                                     alpha:1.0];
-    if(forceDark) return dark;
-    if(forceLight) return light;
+    // 色值走 Core 主题（自定义 accent 混合 + 彩蛋 + 日夜间），与主面板完全同源。
+    LCOrbitColorRole role=secondary?LCOrbitColorSecondary:LCOrbitColorText;
+    NSInteger mode=[[LCOrbitStorage objectForKey:@"appearanceMode" module:kFMModuleName] integerValue];
+    if(mode==1) return [LCOrbitStorage themeColorForRole:role dark:NO];
+    if(mode==2) return [LCOrbitStorage themeColorForRole:role dark:YES];
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        return traits.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light;
+        return [LCOrbitStorage themeColorForRole:role
+                                            dark:traits.userInterfaceStyle==UIUserInterfaceStyleDark];
     }];
 }
-
 static void FMLog(NSString *event, id details) {
     [LCOrbitLog appendEvent:event details:details kind:@"runtime"];
 }
