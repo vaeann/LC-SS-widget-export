@@ -233,14 +233,7 @@ static int FMGridColumns(void) {
     return 3+MAX(0,MIN(2,n));
 }
 static CGFloat FMGridIconSize(void) {
-    // Each column count keeps its own icon size. The default leaves a roomy
-    // 18pt gap; the slider goes ±10, so the tightest setting still keeps a
-    // 10pt gap and the card never has to resize.
-    int cols=FMGridColumns();
-    NSString *key=[[NSString alloc] initWithFormat:@"menuGridIcon%d",cols];
-    id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
-    CGFloat def=cols==3?62:cols==4?42:30;
-    return Clamp(v?[v floatValue]:def,def-10,def+8);
+    return Clamp(FloatPref(@"menuGridIconSize",42),24,60);
 }
 static void SetPref(NSString *key,id value) {
     [HostDefaults() setObject:value forKey:Pref(key)];
@@ -5478,7 +5471,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
-    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(1));SetPref(@"menuGridIcon4",@(42.0));SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactMode",@NO);SetPref(@"menuLayoutV3",@FMLayoutList);SetPref(@"menuGridColumnsV3",@(1));SetPref(@"menuGridIconSize",@(42.0));SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
@@ -7213,9 +7206,6 @@ static NSArray<NSDictionary *> *FMDockExtraOptions(void) {
         @{@"key":@"idleAlpha",@"title":@"平时的透明度",@"min":@.25,@"max":@1,@"default":@.72,@"unit":@"%",@"step":@.05},
         @{@"key":@"panelScale",@"title":@"弹出菜单缩放",@"min":@.5,@"max":@1.2,@"default":@1,@"unit":@"%",@"step":@.05},
         @{@"key":@"glassTint",@"title":@"玻璃主题着色增强",@"min":@0,@"max":@.15,@"default":@0,@"unit":@"%",@"step":@.01},
-        @{@"key":@"menuGridIcon3",@"title":@"3 列图标大小",@"min":@(52),@\"max\":@(70),@\"default\":@(62),@\"unit\":"点",@\"step\":@(1)},
-        @{@"key":@"menuGridIcon4",@"title":@"4 列图标大小",@\"min\":@(32),@\"max\":@(50),@\"default\":@(42),@\"unit\":"点",@\"step\":@(1)},
-        @{@"key":@"menuGridIcon5",@\"title\":"5 列图标大小",@\"min\":@(20),@\"max\":@(38),@\"default\":@(30),@\"unit\":"点",@\"step\":@(1)}
     ];
 }
 // One setting by key, optionally under another title.
@@ -8180,9 +8170,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"menuCompactIconSize",@"图标大小") to:rows group:group when:FMDockWhenCompact];
     [self addSlider:FMDockOption(@"menuListIconSize",@"图标大小") to:rows group:group when:FMDockWhenList];
     [self add:[self segmentRow:@"宫格列数" items:@[@"3 列",@"4 列",@"5 列"] key:@"menuGridColumnsV3" selected:FMGridColumns()-3] to:rows group:group when:FMDockWhenGrid];
-    [self addSlider:FMDockOption(@"menuGridIcon3",nil) to:rows group:group when:FMDockWhenGrid];
-    [self addSlider:FMDockOption(@"menuGridIcon4",nil) to:rows group:group when:FMDockWhenGrid];
-    [self addSlider:FMDockOption(@"menuGridIcon5",nil) to:rows group:group when:FMDockWhenGrid];
+    [self addSlider:FMDockOption(@"menuGridIconSize",@"图标大小") to:rows group:group when:FMDockWhenGrid];
     [self add:[self segmentRow:@"弹出动画" items:@[@"逐个",@"一起",@"关"] key:@"popAnimation" selected:FMPopMode()]
            to:rows group:group when:FMDockWhenAlways];
     if(@available(iOS 26.0,*)) {

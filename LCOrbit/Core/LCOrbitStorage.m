@@ -290,4 +290,60 @@ static NSDictionary *ReadValues(void) {
     @synchronized(self) { ReadValues();if(error) *error=StorageError;return StorageError==nil; }
 }
 + (NSError *)lastError { @synchronized(self) { return StorageError; } }
+
+// ---- 微珠主题色（单一真相） -------------------------------------------------
+// 完整对齐主面板配色公式：文字/背景/表面/边框都从自定义主题色
+// （accentLight/accentDark，LCFloatingMenu 模块的键）按比例混合派生，含彩蛋模式。
+static UIColor *ThemeFromHex(NSString *hex,unsigned fallback) {
+    unsigned rgb=fallback;
+    if([hex isKindOfClass:NSString.class] && hex.length==7 && [hex hasPrefix:@"#"]) {
+        unsigned value=0;
+        NSScanner *scanner=[NSScanner scannerWithString:[hex substringFromIndex:1]];
+        if([scanner scanHexInt:&value] && scanner.isAtEnd) rgb=value;
+    }
+    return [UIColor colorWithRed:((rgb>>16)&255)/255.0
+                           green:((rgb>>8)&255)/255.0
+                            blue:(rgb&255)/255.0 alpha:1.0];
+}
+static UIColor *ThemeMix(UIColor *a,UIColor *b,CGFloat t) {
+    CGFloat r1=0,g1=0,b1=0,a1=0,r2=0,g2=0,b2=0,a2=0;
+    [a getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+    [b getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
+    return [UIColor colorWithRed:r1+(r2-r1)*t green:g1+(g2-g1)*t blue:b1+(b2-b1)*t alpha:a1+(a2-a1)*t];
+}
++ (NSString *)themeModuleKey:(NSString *)key {
+    return [self key:key forModule:@"LCFloatingMenu"];
+}
++ (UIColor *)themeColorForRole:(LCOrbitColorRole)role dark:(BOOL)dark {
+    NSDictionary *prefs=[self preferences];
+    BOOL egg=[[prefs objectForKey:[self themeModuleKey:@"easterEggIOSTheme"]] boolValue];
+    NSString *accentHex=[prefs objectForKey:[self themeModuleKey:dark?@"accentDark":@"accentLight"]];
+    UIColor *accent=ThemeFromHex(accentHex,dark?0x8AC9FF:0x245DAB);
+    if(egg) {
+        switch(role) {
+            case LCOrbitColorAccent:     return ThemeFromHex(dark?@"#0A84FF":@"#007AFF",dark?0x0A84FF:0x007AFF);
+            case LCOrbitColorText:       return ThemeFromHex(dark?@"#FFFFFF":@"#000000",dark?0xFFFFFF:0x000000);
+            case LCOrbitColorSecondary:  return ThemeFromHex(@"#8E8E93",0x8E8E93);
+            case LCOrbitColorBackground: return ThemeFromHex(dark?@"#000000":@"#F2F2F7",dark?0x000000:0xF2F2F7);
+            case LCOrbitColorSurface:    return ThemeFromHex(dark?@"#1C1C1E":@"#FFFFFF",dark?0x1C1C1E:0xFFFFFF);
+            case LCOrbitColorGlass:      return ThemeFromHex(dark?@"#2C2C2E":@"#E5E5EA",dark?0x2C2C2E:0xE5E5EA);
+            case LCOrbitColorRow:        return ThemeFromHex(dark?@"#1C1C1E":@"#FFFFFF",dark?0x1C1C1E:0xFFFFFF);
+            case LCOrbitColorTool:       return ThemeFromHex(dark?@"#2C2C2E":@"#E5E5EA",dark?0x2C2C2E:0xE5E5EA);
+            case LCOrbitColorBorder:     return ThemeFromHex(dark?@"#38383A":@"#D1D1D6",dark?0x38383A:0xD1D1D6);
+        }
+    }
+    UIColor *surface=ThemeFromHex(nil,dark?0x1A2537:0xFFFFFF);
+    switch(role) {
+        case LCOrbitColorAccent:     return accent;
+        case LCOrbitColorText:       return ThemeFromHex(nil,dark?0xF3F7FF:0x182638);
+        case LCOrbitColorSecondary:  return ThemeFromHex(nil,dark?0xC3CEDE:0x4B5B6C);
+        case LCOrbitColorBackground: return ThemeMix(ThemeFromHex(nil,dark?0x0B1220:0xF7F9FD),accent,dark?.12:.085);
+        case LCOrbitColorSurface:    return ThemeMix(surface,accent,dark?.21:.075);
+        case LCOrbitColorGlass:      return ThemeMix(ThemeFromHex(nil,dark?0x22334A:0xF2F8FF),accent,.38);
+        case LCOrbitColorRow:        return ThemeMix(surface,accent,dark?.36:.18);
+        case LCOrbitColorTool:       return ThemeMix(surface,accent,dark?.43:.24);
+        case LCOrbitColorBorder:     return ThemeMix(ThemeFromHex(nil,dark?0x6B829A:0x97A8B8),accent,.36);
+    }
+    return surface;
+}
 @end
