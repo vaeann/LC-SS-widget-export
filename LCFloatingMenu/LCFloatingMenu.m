@@ -4261,7 +4261,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         while(index<displayApps.count) {
             NSUInteger span=MIN((NSUInteger)cols,displayApps.count-index);
             UIStackView *line=[[UIStackView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
-            line.axis=UIStackViewAxisHorizontal;
+            line.axis=UILayoutConstraintAxisHorizontal;
             line.distribution=UIStackViewDistributionFillEqually;
             line.spacing=0;
             for(NSUInteger k=0;k<span;k++) {
