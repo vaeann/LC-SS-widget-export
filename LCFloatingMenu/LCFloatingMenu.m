@@ -3924,8 +3924,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
-    // Grid hit-cells sit around each icon, so every gap reads the same 10pt.
-    CGFloat gridCell=gridIcon;
+    // Grid rows: the cell width comes from the panel width, height = cell + 6.
+    CGFloat gridCell=(gridRowWidth+24-24-2*3-(CGFloat)(gridCols-1)*gridGap)/(CGFloat)gridCols;
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
     CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+6+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
@@ -4182,25 +4182,25 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // Grid layout: square icon cells, no captions; columns adapt to the
         // icon-size slider. Same data source and tap/close handling as the rows.
         UIView *gridGlass=[self.panel viewWithTag:9230];
-        CGFloat icon=FMGridIconSize();
         int cols=FMGridColumns();
-        CGFloat gap=10;
-        CGFloat inner=(CGFloat)cols*(icon+gap);
-        CGFloat cell=icon+gap;
+        CGFloat gap=10,edge=3;
+        CGFloat cell=((gridGlass?gridGlass.bounds.size.width:240)-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
+        CGFloat icon=MIN(FMGridIconSize(),cell-10);
+        CGFloat inner=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
         if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
             [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
         }
         if(hiddenApps.count && _hiddenAppsExpanded) {
             // The grid manages hidden apps in its own horizontal strip under the
             // bar: tap a locked icon to bring the app back into the grid.
-            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
+            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,cell+6)];
             strip.showsHorizontalScrollIndicator=NO;
             strip.alwaysBounceHorizontal=NO;
-            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*cell);
-            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,cell)];
+            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(cell+gap));
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,cell+6)];
             NSUInteger hiddenIndex=0;
             for(NSDictionary *app in hiddenApps) {
-                UIControl *hCell=[[UIControl alloc] initWithFrame:CGRectMake(hiddenIndex*cell,0,cell,cell)];
+                UIControl *hCell=[[UIControl alloc] initWithFrame:CGRectMake(edge+hiddenIndex*(cell+gap),3,cell,cell)];
                 UIView *hiddenIcon=[self iconViewForApp:app size:icon];
                 hiddenIcon.frame=CGRectMake((cell-icon)*.5,(cell-icon)*.5,icon,icon);
                 [hCell addSubview:hiddenIcon];
@@ -4210,9 +4210,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [line addSubview:hCell];
                 hiddenIndex++;
             }
-            strip.contentSize=CGSizeMake(total,cell);
+            strip.contentSize=CGSizeMake(total,cell+6);
             [strip addSubview:line];
-            [self addRow:strip height:cell to:stack];
+            [self addRow:strip height:cell+6 to:stack];
         }
         // Hidden apps live in the strip above, so the grid itself stays clean.
         NSArray<NSDictionary *> *gridApps=(_hiddenAppsExpanded && hiddenApps.count)?normalApps:displayApps;
@@ -4221,10 +4221,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             NSUInteger span=MIN((NSUInteger)cols,gridApps.count-index);
             // Square cells, left-aligned rows: a short last row leaves the rest
             // of the row empty, and the icon centers inside its cell.
-            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell)];
+            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,inner,cell+6)];
             for(NSUInteger k=0;k<span;k++) {
                 NSDictionary *app=gridApps[index+k];
-                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(k*cell,0,cell,cell)];
+                UIControl *cellView=[[UIControl alloc] initWithFrame:CGRectMake(edge+k*(cell+gap),3,cell,cell)];
                 cellView.backgroundColor=UIColor.clearColor;
                 UIView *iconView=[self iconViewForApp:app size:icon];
                 iconView.translatesAutoresizingMaskIntoConstraints=NO;
@@ -4259,9 +4259,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     // The badge hugs the icon's top-right corner, not the whole cell.
                     [NSLayoutConstraint activateConstraints:@[
                         [close.trailingAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-4],
+                            constant:icon*.5-2],
                         [close.topAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5-4],
+                            constant:-icon*.5-2],
                         [close.widthAnchor constraintEqualToConstant:24],
                         [close.heightAnchor constraintEqualToConstant:24]
                     ]];
@@ -7368,7 +7368,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
     NSArray<NSDictionary *> *_favorites;
-    BOOL _dirty,_placed,_left,_compact,_grid,_open,_revealed,_started,_faded,_rebuildScheduled;
+    BOOL _dirty,_placed,_left,_compact,_grid,_open,_revealed,_started,_faded,_rebuildScheduled,_pwDeferred;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
@@ -7439,9 +7439,23 @@ static UIView *FMDockCard(UIStackView *rows) {
     _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
     CGFloat headroom=[manager menuHeadroom:_compact];
-    CGFloat rowHeight=_compact?63:(_grid?FMGridIconSize()+6:MAX(56,48/MAX(.50,_actual)));
+    CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
     CGFloat footer=_compact?76:44;
-    _pw=_compact?76:(_grid?(CGFloat)FMGridColumns()*(FMGridIconSize()+10)+24:240);
+    if(_grid) {
+        CGFloat icon=FMGridIconSize();
+        CGFloat targetPw=(CGFloat)FMGridColumns()*(icon+10)+24;
+        // 原版配合：拖动期间卡片尺寸锁在旧值，图标在旧格内实时缩放；
+        // 松手落盘（FMCommitStagedPreferences 清空暂存）后尺寸一次到位。
+        if(_pw>0 && FMHasStagedPreferences() && fabs(targetPw-_pw)>.5) {
+            _pwDeferred=YES;
+        } else {
+            _pwDeferred=NO;
+            _pw=targetPw;
+            rowHeight=(targetPw-24-2*3-(CGFloat)(FMGridColumns()-1)*10)/(CGFloat)FMGridColumns()+6;
+        }
+    } else {
+        _pw=240;
+    }
     NSArray<NSDictionary *> *pinned=[manager pinnedApps];
     if(!pinned.count) {
         NSArray<NSDictionary *> *allApps=[manager orderedAppsForMenu];
@@ -7604,16 +7618,19 @@ static UIView *FMDockCard(UIStackView *rows) {
         [dividers addObject:divider];
         CGFloat top=_listTop;
         if(_grid) {
-            // The drawer width wraps the grid; the preview mirrors it exactly.
-            CGFloat icon=FMGridIconSize(),gap=10;
+            // Same cell formula as the real drawer; while a slider drags, the
+            // card size stays locked and the icon scales inside its old cell.
             int cols=FMGridColumns();
-            CGFloat cell=icon+gap;
+            CGFloat gap=10,edge=3;
+            CGFloat cell=(_pw-24-2*edge-(CGFloat)(cols-1)*gap)/(CGFloat)cols;
+            CGFloat icon=MIN(FMGridIconSize(),cell-10);
+            CGFloat rowW=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cell+4),(CGFloat)cols*cell,cell)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+rowIndex*(cell+6+4),rowW,cell+6)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *iconView=[self iconForSlot:slot size:icon apps:apps];
-                    iconView.frame=CGRectMake(col*cell+(gap-icon)*.5+5,3,icon,icon);
+                    iconView.frame=CGRectMake(edge+col*(cell+gap)+(cell-icon)*.5,3+(cell-icon)*.5,icon,icon);
                     [row addSubview:iconView];
                 }
                 [_content addSubview:row];
