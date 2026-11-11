@@ -1,0 +1,25 @@
+# Codemagic 构建定义：微珠 LCFloatingMenu.dylib
+# 与 .github/workflows/lc-floating-menu.yml 的 build job 等价：
+#   LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
+#   LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
+# 仅用于测试出包（artifact），不发布 release。
+
+workflows:
+  floating-menu:
+    name: Floating Menu dylib
+    # Intel x64 池容量宽裕；arm64 库用 Xcode 交叉编译，与 macOS-13 runner 等价
+    instance_type: mac_mini
+    max_build_duration: 40
+    environment:
+      xcode: latest
+      groups:
+        - github_credentials
+    scripts:
+      - name: Build arm64 dylib and verify
+        script: |
+          cd $CM_BUILD_DIR
+          LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
+          LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
+          file dist/LCFloatingMenu.dylib
+    artifacts:
+      - dist/LCFloatingMenu.dylib
