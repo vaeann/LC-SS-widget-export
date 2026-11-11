@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-13   # x64 pool: arm64 hosted runners are capacity-starved
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
