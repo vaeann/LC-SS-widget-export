@@ -3992,7 +3992,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Grid floats dead center of the scene, clear of the docking wall.
     CGFloat centerX=grid?(bounds.size.width-edgeInset*.5)/2:
         (self.left?(edgeInset+visualW*.5):(bounds.size.width-edgeInset-visualW*.5));
-    CGFloat topY=grid?MAX(safeTop,(bounds.height-safeBottom-visualH)*.5):
+    CGFloat topY=grid?MAX(safeTop,(bounds.size.height-safeBottom-visualH)*.5):
         (small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
                           safeTop,bounds.size.height-safeBottom-visualH)
                    :safeTop+(available-visualH)*.5);
@@ -4316,7 +4316,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self addRow:deck height:totalHeight to:stack];
         }
     } else if(BoolPref(@"compactMode",NO)) {
-    if(BoolPref(@"compactMode",NO)) {
         if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
             [self addRow:[self compactHiddenCollapseBarWithCount:hiddenApps.count] height:22 to:stack];
         }
