@@ -217,6 +217,22 @@ static BOOL BoolPref(NSString *key,BOOL def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
 }
+// 点击触感：只负责震动，不做任何视觉，也不参与触摸接管。
+// 关键点——生成器复用 + prepare 预热，否则每次新建实例都会晚几十毫秒才响。
+static UIImpactFeedbackGenerator *FMTapGenerator(void) {
+    static UIImpactFeedbackGenerator *generator;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{
+        generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [generator prepare];
+    });
+    return generator;
+}
+static void FMWarmTapHaptic(void) {
+    if(!BoolPref(@"haptic",YES)) return;
+    [FMTapGenerator() prepare];
+}
+
 static CGFloat FloatPref(NSString *key,CGFloat def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v doubleValue]:def;
@@ -2642,6 +2658,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 }
 - (void)draw {
     if(!self.window) return;
+    // 面板一出现就把触感引擎预热，第一次点图标也不会晚半拍。
+    FMWarmTapHaptic();
     // A scene detached mid-flight leaves a morph with no drawer to animate.
     if(_morphActive && !self.panel) [self endDrawerMorph];
     // A drag or settle owns the bead and the drawer; redraw when it is done.
@@ -3753,9 +3771,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
 
     objc_setAssociatedObject(box,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 触感必须比切换先注册：TouchUpInside 的 action 按注册顺序执行，
+    // 而启动游客是同步重活，排在它后面就会被推迟几十到上百毫秒。
+    [box addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
     [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-    // 抬手回执：点击成立后轻弹一下。
-    [box addTarget:self action:@selector(bounceIcon:) forControlEvents:UIControlEventTouchUpInside];
 
     if(![app[@"builtin"] boolValue] && !current) {
         UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(appIconHold:)];
@@ -3834,9 +3853,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     row.accessibilityLabel=FMAppCaption(app);
     row.accessibilityTraits=UIAccessibilityTraitButton;
     objc_setAssociatedObject(row,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [row addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
     [row addTarget:self action:@selector(switchFromRow:)
         forControlEvents:UIControlEventTouchUpInside];
-    [row addTarget:self action:@selector(bounceIcon:) forControlEvents:UIControlEventTouchUpInside];
     if(!running) return row;
     // Sibling controls keep close taps independent of the row's switch action.
     UIView *container=[[UIView alloc] initWithFrame:row.frame];
@@ -4235,9 +4254,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 cellView.accessibilityTraits=UIAccessibilityTraitButton;
                 objc_setAssociatedObject(cellView,@selector(switchFromRow:),
                                          app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [cellView addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
                 [cellView addTarget:self action:@selector(switchFromRow:)
                     forControlEvents:UIControlEventTouchUpInside];
-                [cellView addTarget:self action:@selector(bounceIcon:) forControlEvents:UIControlEventTouchUpInside];
                 if([LCOrbitMultitask isRunningGuest:app]) {
                     // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
                     // 微微冒头；直径随图标缩放 16~22。
@@ -4317,9 +4336,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             ]];
             objc_setAssociatedObject(row,@selector(switchFromRow:),
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [row addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
-            [row addTarget:self action:@selector(bounceIcon:) forControlEvents:UIControlEventTouchUpInside];
             if([LCOrbitMultitask isRunningGuest:app]) {
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
@@ -4478,33 +4497,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     return bar;
 }
 
-// 宫格隐藏区：横向叠卡。每张露出格子的 30%，最多 6 张，超出用 +N 收尾。
-// 方向与列表/精简的纵向叠卡对应，只是旋转了 90°。
-// 点击回执：抬手成立后图标轻弹一下（缩 0.92 → 弹簧回 1.0）。
-// 只在 touchUp 之后发生，不参与触摸接管，滚动不受影响。
-- (void)bounceIcon:(UIControl *)sender {
-    UIView *icon=sender;
-    if(icon.tag!=9233) icon=[sender viewWithTag:9233];
-    if(!icon) return;
-    [UIView animateWithDuration:.06 delay:0
-                         options:UIViewAnimationOptionCurveEaseOut|UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-        icon.transform=CGAffineTransformMakeScale(.92,.92);
-    } completion:^(BOOL finished){
-        [UIView animateWithDuration:.22 delay:0 usingSpringWithDamping:.55 initialSpringVelocity:.5
-                             options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
-                         animations:^{ icon.transform=CGAffineTransformIdentity; }
-                         completion:nil];
-    }];
-    if(BoolPref(@"haptic",YES)) {
-        if(@available(iOS 13.0,*)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurredWithIntensity:.5];
-        } else {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-        }
-    }
+// 点击触感：只发一下轻震，没有任何视觉动画，也不参与触摸接管。
+// 注册时排在 switchFromRow 之前，启动游客的同步重活推后不了它。
+- (void)fmTapTick:(UIControl *)sender {
+    if(!BoolPref(@"haptic",YES)) return;
+    UIImpactFeedbackGenerator *generator=FMTapGenerator();
+    if(@available(iOS 13.0,*)) [generator impactOccurredWithIntensity:.5];
+    else [generator impactOccurred];
+    [generator prepare]; // 立刻为下一次预热
 }
 
+// 宫格隐藏区：横向叠卡。每张露出格子的 30%，最多 6 张，超出用 +N 收尾。
+// 方向与列表/精简的纵向叠卡对应，只是旋转了 90°。
 - (UIView *)gridHiddenDeckView:(NSArray<NSDictionary *> *)hiddenApps
                           cell:(CGFloat)cell icon:(CGFloat)icon edge:(CGFloat)edge {
     UIControl *deck=[UIControl new];
@@ -4645,15 +4649,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     CGFloat w=glass.bounds.size.width;
     CGFloat height=self.panelFooterHeight;
-    // 列表/宫格：容器一直延伸到面板底边，按钮在「滚动区底边～面板底边」整段里居中。
-    // 精简仍按原来的 76 高处理（未纳入本次调整）。
-    CGFloat barHeight=compact?height:height+6+FMMenuStyleValue(@"menuExtension");
-    // The footer sits exactly where buildPanel reserved room for it
-    // (bottom = footer + 6 + extension), so stretching the shell moves it too
-    // instead of leaving it stranded at a fixed 28pt.
+    // 真正的底栏「底线」= 面板底边往上 6 + 肩部（menuExtension 换算）。
+    // 底栏只占 height（列表/宫格 44、精简 76），按钮在这段里居中即上下各 4；
+    // 底线以下那 6+肩部 是抽屉的悬空留白，不是底栏的一部分，
+    // 拿面板几何底边当基准会把按钮推进悬空区（拉满延展时整颗掉出玻璃）。
     CGFloat extension=FMMenuStyleValue(@"menuExtension")*(compact?22./28:1.);
+    CGFloat baseline=glass.bounds.size.height-6-extension;
+    CGFloat barHeight=height;
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:12,
-                       glass.bounds.size.height-barHeight,w-(compact?6:24),barHeight)];
+                       baseline-barHeight,w-(compact?6:24),barHeight)];
     footer.backgroundColor=UIColor.clearColor;
     footer.tag=9232; // The drawer pop-in animates its buttons one by one.
     [FMGlassContent(glass) addSubview:footer];
@@ -7743,8 +7747,9 @@ static UIView *FMDockCard(UIStackView *rows) {
         }
         [glyphs addObject:@"gearshape.fill"];
         [glyphs addObject:_left?@"chevron.compact.left":@"chevron.compact.right"];
-        CGFloat barH=44+6+shoulder;
-        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-barH,inner,barH)];
+        // 预览与实际同一套：底栏高 44，底边压在「真正的底线」上（下面 6+肩部 留空）。
+        CGFloat barH=44;
+        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-6-shoulder-barH,inner,barH)];
         [_content addSubview:bar];
         CGFloat slot=bar.bounds.size.width/glyphs.count;
         for(NSUInteger index=0;index<glyphs.count;index++) {
