@@ -3805,7 +3805,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     ]];
     row.accessibilityLabel=FMAppCaption(app);
     row.accessibilityTraits=UIAccessibilityTraitButton;
-    row.enabled=!current;
     objc_setAssociatedObject(row,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [row addTarget:self action:@selector(switchFromRow:)
         forControlEvents:UIControlEventTouchUpInside];
@@ -4224,7 +4223,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 ]];
                 cellView.accessibilityLabel=FMAppCaption(app);
                 cellView.accessibilityTraits=UIAccessibilityTraitButton;
-                cellView.enabled=![LCOrbitGuestService isCurrentGuest:app];
                 objc_setAssociatedObject(cellView,@selector(switchFromRow:),
                                          app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [cellView addTarget:self action:@selector(switchFromRow:)
@@ -4256,9 +4254,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     [NSLayoutConstraint activateConstraints:@[
                         [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-2-badge*.5],
+                            constant:icon*.5-badge*.5],
                         [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5+2+badge*.5],
+                            constant:-icon*.5+badge*.5],
                         [close.widthAnchor constraintEqualToConstant:badge],
                         [close.heightAnchor constraintEqualToConstant:badge],
                         [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
@@ -4302,7 +4300,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             }
             row.accessibilityLabel=FMAppCaption(app);
             row.accessibilityTraits=UIAccessibilityTraitButton;
-            row.enabled=![LCOrbitGuestService isCurrentGuest:app];
             CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
             UIView *icon=[self iconViewForApp:app size:iconSize];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
@@ -4349,9 +4346,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [container addSubview:close];
                 [NSLayoutConstraint activateConstraints:@[
                     [close.centerXAnchor constraintEqualToAnchor:container.centerXAnchor
-                        constant:iconSize*.5-2-badge*.5],
+                        constant:iconSize*.5-badge*.5],
                     [close.centerYAnchor constraintEqualToAnchor:container.centerYAnchor
-                        constant:-iconSize*.5+2+badge*.5],
+                        constant:-iconSize*.5+badge*.5],
                     [close.widthAnchor constraintEqualToConstant:badge],
                     [close.heightAnchor constraintEqualToConstant:badge],
                     [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
