@@ -4230,10 +4230,21 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [cellView addTarget:self action:@selector(switchFromRow:)
                     forControlEvents:UIControlEventTouchUpInside];
                 if([LCOrbitMultitask isRunningGuest:app]) {
+                    // 关闭角标：白描边 + 红底。旧版把 24pt 按钮贴在 right-2 / top-2，
+                    // 圆点在图标内偏左偏下（约 14 / 10），看着是"错位"；改成圆点中心
+                    // 对齐图标右上角内缩 2，四边等距。直径随图标缩放 16~22。
+                    CGFloat badge=MIN(22,MAX(16,icon*.38));
+                    UIView *ring=[[UIView alloc] initWithFrame:CGRectMake(0,0,badge+3,badge+3)];
+                    ring.translatesAutoresizingMaskIntoConstraints=NO;
+                    ring.userInteractionEnabled=NO;
+                    ring.backgroundColor=UIColor.whiteColor;
+                    ring.layer.cornerRadius=(badge+3)*.5;
+                    ring.layer.cornerCurve=kCACornerCurveCircular;
+                    [cellView addSubview:ring];
                     UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                     close.translatesAutoresizingMaskIntoConstraints=NO;
                     UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration
-                        configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+                        configurationWithPointSize:badge weight:UIImageSymbolWeightSemibold];
                     [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill"
                                                   withConfiguration:symbol] forState:UIControlStateNormal];
                     close.tintColor=UIColor.systemRedColor;
@@ -4243,14 +4254,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [close addTarget:self action:@selector(closeTaskFromButton:)
                         forControlEvents:UIControlEventTouchUpInside];
                     [cellView addSubview:close];
-                    // The badge hugs the icon's top-right corner, not the whole cell.
                     [NSLayoutConstraint activateConstraints:@[
-                        [close.trailingAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-2],
-                        [close.topAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5-2],
-                        [close.widthAnchor constraintEqualToConstant:24],
-                        [close.heightAnchor constraintEqualToConstant:24]
+                        [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
+                            constant:icon*.5-2-badge*.5],
+                        [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
+                            constant:-icon*.5+2+badge*.5],
+                        [close.widthAnchor constraintEqualToConstant:badge],
+                        [close.heightAnchor constraintEqualToConstant:badge],
+                        [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
+                        [ring.centerYAnchor constraintEqualToAnchor:close.centerYAnchor],
+                        [ring.widthAnchor constraintEqualToConstant:badge+3],
+                        [ring.heightAnchor constraintEqualToConstant:badge+3]
                     ]];
                 }
                 [line addSubview:cellView];
@@ -4304,7 +4318,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
             if([LCOrbitMultitask isRunningGuest:app]) {
-                CGFloat closeSize=MIN(32,24/MAX(.70,self.panelContentScale?:1));
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
                 // switching and keeps running/nonrunning rows equally tall.
@@ -4316,11 +4329,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [row.topAnchor constraintEqualToAnchor:container.topAnchor],
                     [row.heightAnchor constraintEqualToConstant:63]
                 ]];
+                // 与宫格同款角标：白描边 + 红底，圆心钉在图标右上角内缩 2。
+                CGFloat badge=MIN(22,MAX(16,iconSize*.38));
+                UIView *ring=[[UIView alloc] initWithFrame:CGRectMake(0,0,badge+3,badge+3)];
+                ring.translatesAutoresizingMaskIntoConstraints=NO;
+                ring.userInteractionEnabled=NO;
+                ring.backgroundColor=UIColor.whiteColor;
+                ring.layer.cornerRadius=(badge+3)*.5;
+                ring.layer.cornerCurve=kCACornerCurveCircular;
+                [container addSubview:ring];
                 UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
-                close.contentHorizontalAlignment=UIControlContentHorizontalAlignmentRight;
-                close.contentVerticalAlignment=UIControlContentVerticalAlignmentTop;
-                UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+                UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:badge weight:UIImageSymbolWeightSemibold];
                 [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
                 close.tintColor=UIColor.systemRedColor;
                 close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
@@ -4328,10 +4348,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
                 [container addSubview:close];
                 [NSLayoutConstraint activateConstraints:@[
-                    [close.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-2],
-                    [close.topAnchor constraintEqualToAnchor:container.topAnchor],
-                    [close.widthAnchor constraintEqualToConstant:closeSize],
-                    [close.heightAnchor constraintEqualToConstant:closeSize]
+                    [close.centerXAnchor constraintEqualToAnchor:container.centerXAnchor
+                        constant:iconSize*.5-2-badge*.5],
+                    [close.centerYAnchor constraintEqualToAnchor:container.centerYAnchor
+                        constant:-iconSize*.5+2+badge*.5],
+                    [close.widthAnchor constraintEqualToConstant:badge],
+                    [close.heightAnchor constraintEqualToConstant:badge],
+                    [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
+                    [ring.centerYAnchor constraintEqualToAnchor:close.centerYAnchor],
+                    [ring.widthAnchor constraintEqualToConstant:badge+3],
+                    [ring.heightAnchor constraintEqualToConstant:badge+3]
                 ]];
                 [self addRow:container height:63 to:stack];
             } else [self addRow:row height:63 to:stack];
@@ -7433,7 +7459,9 @@ static UIView *FMDockCard(UIStackView *rows) {
         // inside their cell, and nothing about the card moves while a slider
         // drags — the same contract the list preview has always had.
         _pw=260;
-        rowHeight=FMGridCell(_pw,FMGridColumns())+6;
+        // 实际抽屉里行的入栈高度被约束成 cell、栈间距 4，行距是 cell+4。
+        // 这里存 cell，下面 _ph 的 (rowHeight+4) 正好还原同一条行距。
+        rowHeight=FMGridCell(_pw,FMGridColumns());
     } else {
         _pw=_compact?76:240;
     }
@@ -7606,8 +7634,12 @@ static UIView *FMDockCard(UIStackView *rows) {
             CGFloat cell=FMGridCell(_pw,cols);
             CGFloat icon=MIN(FMGridIconSize(),cell);
             CGFloat rowW=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
+            // Real drawer pitch: row constrained to cell + 4pt stack spacing. The row
+            // view here is 4pt taller than cell only so the icon's 3pt top inset
+            // cannot be clipped — the icons still land on the same pixel rows.
+            CGFloat pitch=cell+4;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(FMGridPad,top+rowIndex*(cell+6+4),rowW,cell+6)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(FMGridPad,top+rowIndex*pitch,rowW,pitch)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *iconView=[self iconForSlot:slot size:icon apps:apps];
