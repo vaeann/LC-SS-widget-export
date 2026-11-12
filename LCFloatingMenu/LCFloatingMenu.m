@@ -3834,6 +3834,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     objc_setAssociatedObject(row,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [row addTarget:self action:@selector(switchFromRow:)
         forControlEvents:UIControlEventTouchUpInside];
+    [row addTarget:self action:@selector(pressDown:) forControlEvents:UIControlEventTouchDown];
+    [row addTarget:self action:@selector(pressUp:) forControlEvents:
+        UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     if(!running) return row;
     // Sibling controls keep close taps independent of the row's switch action.
     UIView *container=[[UIView alloc] initWithFrame:row.frame];
@@ -4234,6 +4237,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                                          app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [cellView addTarget:self action:@selector(switchFromRow:)
                     forControlEvents:UIControlEventTouchUpInside];
+                [cellView addTarget:self action:@selector(pressDown:) forControlEvents:UIControlEventTouchDown];
+                [cellView addTarget:self action:@selector(pressUp:) forControlEvents:
+                    UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
                 if([LCOrbitMultitask isRunningGuest:app]) {
                     // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
                     // 微微冒头；直径随图标缩放 16~22。
@@ -4315,6 +4321,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
+            [row addTarget:self action:@selector(pressDown:) forControlEvents:UIControlEventTouchDown];
+            [row addTarget:self action:@selector(pressUp:) forControlEvents:
+                UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
             if([LCOrbitMultitask isRunningGuest:app]) {
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
@@ -4475,6 +4484,35 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 
 // 宫格隐藏区：横向叠卡。每张露出格子的 30%，最多 6 张，超出用 +N 收尾。
 // 方向与列表/精简的纵向叠卡对应，只是旋转了 90°。
+// 点击反馈：按下缩到 0.94 并压暗，抬起弹簧回弹；长按/滑走/取消都要复原。
+- (void)pressDown:(UIControl *)sender {
+    UIView *icon=[sender viewWithTag:9233];
+    if(!icon) return;
+    [UIView animateWithDuration:.12 delay:0
+                         options:UIViewAnimationOptionCurveEaseOut|UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        icon.transform=CGAffineTransformMakeScale(.94,.94);
+        icon.alpha=.88;
+    } completion:nil];
+    if(BoolPref(@"haptic",YES)) {
+        if(@available(iOS 13.0,*)) {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurredWithIntensity:.55];
+        } else {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        }
+    }
+}
+- (void)pressUp:(UIControl *)sender {
+    UIView *icon=[sender viewWithTag:9233];
+    if(!icon) return;
+    [UIView animateWithDuration:.32 delay:0 usingSpringWithDamping:.62 initialSpringVelocity:.4
+                         options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        icon.transform=CGAffineTransformIdentity;
+        icon.alpha=1;
+    } completion:nil];
+}
+
 - (UIView *)gridHiddenDeckView:(NSArray<NSDictionary *> *)hiddenApps
                           cell:(CGFloat)cell icon:(CGFloat)icon edge:(CGFloat)edge {
     UIControl *deck=[UIControl new];
@@ -7624,7 +7662,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             [_content addSubview:row];
             [items addObject:row];
         }
-        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(3,ph-76-6-22,width,76)];
+        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(3,ph-76-6-shoulder,width,76)];
         [_content addSubview:bar];
         UIView *divider=FMMakeGlowSeparator(CGRectMake(13,0,width-26,1.0));
         [bar addSubview:divider];
