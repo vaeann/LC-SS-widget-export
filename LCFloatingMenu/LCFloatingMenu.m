@@ -223,7 +223,9 @@ static UIImpactFeedbackGenerator *FMTapGenerator(void) {
     static UIImpactFeedbackGenerator *generator;
     static dispatch_once_t once;
     dispatch_once(&once,^{
-        generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        UIImpactFeedbackStyle style=UIImpactFeedbackStyleLight;
+        if(@available(iOS 13.0,*)) style=UIImpactFeedbackStyleRigid;
+        generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:style];
         [generator prepare];
     });
     return generator;
@@ -2095,6 +2097,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)updateEasterEggSnowEffect;
 - (void)stopEasterEggSnowEffect;
 - (void)triggerEasterEggConfetti;
+- (void)endScrubAnimated:(BOOL)animated;
+- (void)toggleAppHide:(NSDictionary *)app;
 @end
 @implementation FMManager {
     CGPoint _panStartPoint;
@@ -2134,7 +2138,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CADisplayLink *_scrubLink;
     CFTimeInterval _scrubScrollTick;
     NSInteger _scrubIndex;
-    BOOL _scrubActive,_scrubCancelling;
+    BOOL _scrubActive,_scrubCancelling,_scrubMoved;
+    CGPoint _scrubStartPoint;
+    UILongPressGestureRecognizer *_scrubGesture;
     UISelectionFeedbackGenerator *_scrubTick;
     BOOL _hiddenAppsExpanded;
 }
@@ -2950,7 +2956,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
     if(BoolPref(@"haptic",YES)) {
         if(@available(iOS 13.0,*)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid] impactOccurredWithIntensity:.65];
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurredWithIntensity:.7];
         } else {
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
         }
@@ -3280,8 +3286,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         BOOL overRow=[self scrubRowIndexAtPoint:point]!=NSNotFound;
         if(gestureRecognizer.view!=self.appsScroll) return !overRow;
         UIView *hit=[self.appsScroll hitTest:point withEvent:nil];
-        BOOL isInteractiveButton=[hit isKindOfClass:UIButton.class] || [hit isKindOfClass:UIControl.class] || hit.tag==9233;
-        return self.isOpen && !_morphActive && overRow && !isInteractiveButton;
+        // 行和图标本身就是控件，一刀切会把整个手势掐死；只在关闭角标上让路。
+        BOOL onCloseBadge=NO;
+        for(UIView *view=hit;view && view!=self.appsScroll;view=view.superview)
+            if([view isKindOfClass:FMCloseHitButton.class]) { onCloseBadge=YES; break; }
+        return self.isOpen && !_morphActive && overRow && !onCloseBadge;
     }
     if(![gestureRecognizer isKindOfClass:UIPanGestureRecognizer.class]) return YES;
     if(!self.isOpen || _morphActive || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) return NO;
@@ -3340,9 +3349,20 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (NSArray<UIView *> *)scrubRowsWithControls:(NSArray<UIControl *> **)controls {
     NSMutableArray<UIView *> *rows=[NSMutableArray array];
     NSMutableArray<UIControl *> *found=[NSMutableArray array];
+    BOOL grid=FMMenuLayout()==FMLayoutGrid;
     for(UIView *view in self.appsScroll.subviews) {
         if(![view isKindOfClass:UIStackView.class]) continue;
         for(UIView *row in ((UIStackView *)view).arrangedSubviews) {
+            if(grid) {
+                // 宫格的一行里放着多个格子，逐格采集，透镜才能对准单个图标。
+                for(UIView *cell in row.subviews) {
+                    UIControl *control=[self switchControlIn:cell];
+                    if(!control) continue;
+                    [rows addObject:cell];
+                    [found addObject:control];
+                }
+                continue;
+            }
             UIControl *control=[self switchControlIn:row];
             if(!control) continue;
             [rows addObject:row];
@@ -3359,6 +3379,15 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     for(NSUInteger index=0;index<rows.count;index++)
         if(CGRectContainsPoint([rows[index] convertRect:rows[index].bounds toView:self.appsScroll],point)) return index;
     return NSNotFound;
+}
+// 宫格用：手指点在哪一格，就取哪一格（2D 命中，行内可能有多个格子）。
+- (NSInteger)scrubIndexAtPoint:(CGPoint)point {
+    for(NSUInteger index=0;index<_scrubFrames.count;index++) {
+        CGRect frame=_scrubFrames[index].CGRectValue;
+        if(!CGRectIntersectsRect(frame,_scrubViewport)) continue;
+        if(CGRectContainsPoint(frame,point)) return (NSInteger)index;
+    }
+    return _scrubIndex;
 }
 // The lens: a soft light pill with a bright edge fading downward, like the dock's.
 - (UIView *)scrubLensWithFrame:(CGRect)frame {
@@ -3441,6 +3470,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     _scrubCancelling=NO;_scrubActive=YES;
     _scrubPoint=[g locationInView:glass];
     _scrubStartY=_scrubPoint.y;
+    _scrubStartPoint=_scrubPoint;
+    _scrubMoved=NO;
     CGRect box=CGRectInset([rows[found] convertRect:rows[found].bounds toView:glass],-3,-3);
     _scrubHalf=box.size.height*.5;
     [self scrubMeasure];
@@ -3461,8 +3492,25 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             animations:^{ lens.alpha=1;lens.transform=CGAffineTransformIdentity; } completion:nil];
     }
     [self scrubFocus:_scrubIndex];
+    // 长按不动 = 隐藏：透镜出现后再按住 0.42 秒（合计约 0.7 秒）且手指没动，就收起透镜并隐藏该 App。
+    // 之前是图标上另挂一支 0.45 秒长按，两者抢同一个手势，透镜因此永远起不来。
+    UIControl *holdControl=(_scrubIndex>=0 && _scrubIndex<(NSInteger)_scrubControls.count)?_scrubControls[_scrubIndex]:nil;
+    NSDictionary *holdApp=holdControl?objc_getAssociatedObject(holdControl,@selector(switchFromRow:)):nil;
+    if(holdApp && ![holdApp[@"builtin"] boolValue] && ![LCOrbitGuestService isCurrentGuest:holdApp]) {
+        __weak typeof(self) weakSelf=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.42*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            __strong typeof(weakSelf) strongSelf=weakSelf;
+            if(!strongSelf || !strongSelf->_scrubActive || strongSelf->_scrubMoved) return;
+            if(strongSelf->_scrubIndex<0 ||
+               strongSelf->_scrubIndex>=(NSInteger)strongSelf->_scrubControls.count) return;
+            UIControl *control=strongSelf->_scrubControls[strongSelf->_scrubIndex];
+            NSDictionary *app=objc_getAssociatedObject(control,@selector(switchFromRow:));
+            [strongSelf endScrubAnimated:YES];
+            if(app) [strongSelf toggleAppHide:app];
+        });
+    }
     if(BoolPref(@"haptic",YES)) {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurredWithIntensity:.9];
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurredWithIntensity:.6];
         _scrubTick=[UISelectionFeedbackGenerator new];
         [_scrubTick prepare];
     }
@@ -3505,8 +3553,21 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!glass || !_scrubLens) return;
     [self scrubMeasure];
     CGPoint point=_scrubPoint;
-    CGFloat lensY=FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid);
-    NSInteger index=[self scrubIndexAtLensY:lensY];
+    BOOL grid=FMMenuLayout()==FMLayoutGrid;
+    CGFloat lensX=_scrubLens.center.x,lensY=0;
+    NSInteger index=_scrubIndex;
+    if(grid) {
+        // 宫格：透镜跟手指二维走，取项按手指实际落到的那个格子。
+        lensX=Clamp(point.x,CGRectGetMinX(_scrubViewport)+_scrubHalf,
+                            CGRectGetMaxX(_scrubViewport)-_scrubHalf);
+        lensY=Clamp(point.y,CGRectGetMinY(_scrubViewport)+_scrubHalf,
+                            CGRectGetMaxY(_scrubViewport)-_scrubHalf);
+        NSInteger hit=[self scrubIndexAtPoint:point];
+        if(hit!=NSNotFound) index=hit;
+    } else {
+        lensY=FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid);
+        index=[self scrubIndexAtLensY:lensY];
+    }
     BOOL outside=FMScrubIsOutside(point.x,CGRectGetWidth(glass.bounds));
     BOOL moved=index!=_scrubIndex,flipped=outside!=_scrubCancelling;
     _scrubIndex=index;
@@ -3518,8 +3579,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     } else if(flipped) [self updateScrubLabel];
     // The lens follows the finger on a short spring; leaving the drawer shrinks and dims it.
     UIView *lens=_scrubLens;
-    if(fabs(lens.center.y-lensY)<.01 && !flipped) return;
-    CGPoint center=CGPointMake(lens.center.x,lensY);
+    if(fabs(lens.center.x-lensX)<.01 && fabs(lens.center.y-lensY)<.01 && !flipped) return;
+    CGPoint center=CGPointMake(lensX,lensY);
     CGAffineTransform shape=outside?CGAffineTransformMakeScale(.85,.85):CGAffineTransformIdentity;
     CGFloat alpha=outside?.45:1;
     void (^follow)(void)=^{
@@ -3538,6 +3599,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *glass=[self.panel viewWithTag:9230];
     if(!glass || !_scrubLens) return;
     _scrubPoint=[g locationInView:glass];
+    if(!_scrubMoved) {
+        CGFloat dx=_scrubPoint.x-_scrubStartPoint.x,dy=_scrubPoint.y-_scrubStartPoint.y;
+        if(dx*dx+dy*dy>64) _scrubMoved=YES; // 超过 8pt 就算在扫选，不当成长按隐藏
+    }
     [self refreshScrub];
     [self updateScrubAutoScroll];
 }
@@ -3776,12 +3841,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [box addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
     [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
 
-    if(![app[@"builtin"] boolValue] && !current) {
-        UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(appIconHold:)];
-        hold.minimumPressDuration=0.45;
-        objc_setAssociatedObject(hold,@selector(appIconHold:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [box addGestureRecognizer:hold];
-    }
+    // 长按隐藏不再单独挂手势：它和 0.28 秒的放大镜抢同一个触摸。
+    // 现在统一由 scrub 处理——按住不动约 0.7 秒隐藏，滑起来则是扫选。
     return box;
 }
 - (void)toggleAppHide:(NSDictionary *)app {
@@ -4052,14 +4113,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // Hold an app for a moment and a glass lens slides over the list (after
         // the wloc dock): slide to pick, let go to switch. Moving before the
         // delay is a scroll or a tap, as before.
-        if(!grid) {
-            UILongPressGestureRecognizer *scrubPress=[[UILongPressGestureRecognizer alloc]
-                initWithTarget:self action:@selector(scrubPress:)];
-            scrubPress.minimumPressDuration=.28;
-            scrubPress.allowableMovement=10;
-            scrubPress.delegate=self;
-            [scroll addGestureRecognizer:scrubPress];
-        }
+        // 列表、精简、宫格都支持；宫格按「格子」取项，不是按行。
+        UILongPressGestureRecognizer *scrubPress=[[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(scrubPress:)];
+        scrubPress.minimumPressDuration=.28;
+        scrubPress.allowableMovement=10;
+        scrubPress.delegate=self;
+        [scroll addGestureRecognizer:scrubPress];
+        _scrubGesture=scrubPress;
         self.appsScrollRestorePending=YES;
         [self appPage:stack];
         CGFloat offset=self.appsScrollOffset;
@@ -4679,8 +4740,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         button.accessibilityTraits=UIAccessibilityTraitButton;
         button.accessibilityHint=@"轻触执行";
         CGFloat tileSize=compact?50:36;
+        // 列表/宫格整体下移 2：底栏 44 里变成 6 上 / 2 下（下界是真基线）。
+        CGFloat tileTop=(hit.size.height-tileSize)*.5+(compact?0:2);
         UIView *tile=[[UIView alloc] initWithFrame:
-            CGRectMake((hit.size.width-tileSize)*.5,(hit.size.height-tileSize)*.5,
+            CGRectMake((hit.size.width-tileSize)*.5,tileTop,
                        tileSize,tileSize)];
         if(!compact) {
             button.frame=CGRectOffset(tile.frame,hit.origin.x,hit.origin.y);
@@ -7754,7 +7817,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         CGFloat slot=bar.bounds.size.width/glyphs.count;
         for(NSUInteger index=0;index<glyphs.count;index++) {
             UIView *tile=[self footerTile:glyphs[index] compact:NO size:36];
-            tile.frame=CGRectMake(index*slot+(slot-36)*.5,(barH-36)*.5,36,36);
+            tile.frame=CGRectMake(index*slot+(slot-36)*.5,(barH-36)*.5+2,36,36);
             [bar addSubview:tile];
             [items addObject:tile];
         }
