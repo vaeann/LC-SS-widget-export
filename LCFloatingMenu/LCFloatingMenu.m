@@ -1664,6 +1664,31 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 @end
 
+// 关闭角标画成"红色实心圆 + 白色叉"。SF Symbol 的 xmark.circle.fill 里那根叉是镂空的，
+// 只会透出底下的图标，去掉白环后就变成"透明叉"，所以这里自己画一张，叉固定白色。
+static UIImage *FMCloseBadgeImage(CGFloat diameter) {
+    if(diameter<10) diameter=10;
+    UIGraphicsImageRendererFormat *format=[UIGraphicsImageRendererFormat defaultFormat];
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc]
+        initWithSize:CGSizeMake(diameter,diameter) format:format];
+    UIImage *image=[renderer imageWithActions:^(UIGraphicsImageRendererContext *context){
+        CGContextRef ctx=context.CGContext;
+        [UIColor.systemRedColor setFill];
+        CGContextFillEllipseInRect(ctx,CGRectMake(0,0,diameter,diameter));
+        CGFloat inset=diameter*.29;
+        CGFloat width=MAX(1.4,diameter*.13);
+        [UIColor.whiteColor setStroke];
+        CGContextSetLineWidth(ctx,width);
+        CGContextSetLineCap(ctx,kCGLineCapRound);
+        CGContextMoveToPoint(ctx,inset,inset);
+        CGContextAddLineToPoint(ctx,diameter-inset,diameter-inset);
+        CGContextMoveToPoint(ctx,diameter-inset,inset);
+        CGContextAddLineToPoint(ctx,inset,diameter-inset);
+        CGContextStrokePath(ctx);
+    }];
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
 @interface FMGroupedRowControl : UIControl
 @property(nonatomic,strong) UIColor *idleBackgroundColor;
 @end
@@ -3819,9 +3844,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     close.frame=CGRectMake(container.bounds.size.width-closeSize,(height-closeSize)*.5,
                            closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
-    UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold];
-    [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
-    close.tintColor=UIColor.systemRedColor;
+    [close setImage:FMCloseBadgeImage(20) forState:UIControlStateNormal];
     close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
     objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
@@ -4233,11 +4256,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     CGFloat badge=MIN(22,MAX(16,icon*.38));
                     UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                     close.translatesAutoresizingMaskIntoConstraints=NO;
-                    UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration
-                        configurationWithPointSize:badge weight:UIImageSymbolWeightSemibold];
-                    [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill"
-                                                  withConfiguration:symbol] forState:UIControlStateNormal];
-                    close.tintColor=UIColor.systemRedColor;
+                    [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
                     close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
                     objc_setAssociatedObject(close,@selector(closeTaskFromButton:),
                                              app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -4246,9 +4265,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     [NSLayoutConstraint activateConstraints:@[
                         [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-badge*.5+2],
+                            constant:icon*.5-badge*.5+5],
                         [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5+badge*.5-2],
+                            constant:-icon*.5+badge*.5-5],
                         [close.widthAnchor constraintEqualToConstant:badge],
                         [close.heightAnchor constraintEqualToConstant:badge]
                     ]];
@@ -4324,9 +4343,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 CGFloat badge=MIN(22,MAX(16,iconSize*.38));
                 UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
-                UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:badge weight:UIImageSymbolWeightSemibold];
-                [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
-                close.tintColor=UIColor.systemRedColor;
+                [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
                 close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
                 objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
