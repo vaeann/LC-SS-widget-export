@@ -3754,6 +3754,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 
     objc_setAssociatedObject(box,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
+    // 宫格里图标和格子等大，触摸永远是落在图标这层，反馈只能挂在这里。
+    [box addTarget:self action:@selector(pressDown:) forControlEvents:UIControlEventTouchDown];
+    [box addTarget:self action:@selector(pressUp:) forControlEvents:
+        UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
 
     if(![app[@"builtin"] boolValue] && !current) {
         UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(appIconHold:)];
@@ -4005,6 +4009,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
+    scroll.delaysContentTouches=NO;
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     scroll.contentInset=UIEdgeInsetsMake(0,0,grid?FMGridMargin:4,0);
     [FMGlassContent(glass) addSubview:scroll];
