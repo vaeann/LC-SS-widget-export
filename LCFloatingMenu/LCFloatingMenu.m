@@ -3934,8 +3934,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
     CGFloat gridCell=FMGridCell(pw,gridCols);
+    // 宫格底部的隐藏叠卡 / 展开时顶部那条，都要算进面板高度。
+    NSUInteger gridHidden=0;
+    if(grid) for(NSDictionary *item in self.apps) if([item[@"hidden"] boolValue]) gridHidden++;
+    CGFloat gridExtra=(gridHidden>=2)?(_hiddenAppsExpanded?26+FMGridGapPx:gridCell+FMGridGapPx):0;
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
-    CGFloat target=small?(grid?top+bottom+FMGridMargin*2+(CGFloat)gridRows*(gridCell+FMGridGapPx):
+    CGFloat target=small?(grid?top+bottom+FMGridMargin*2+gridExtra+(CGFloat)gridRows*(gridCell+FMGridGapPx):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
     if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell+6:[self appRowHeight])));
@@ -4191,6 +4195,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(FMMenuGrid()) {
         // Grid layout: square icon cells, no captions; columns adapt to the
         // icon-size slider. Same data source and tap/close handling as the rows.
+        // 展开时最上方一条「已隐藏应用 (N)」，点它收回成尾部叠卡。
+        if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
+            [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
+        }
         // 四边 14：顶部靠 spacer 补到 14（行距 7 + 行内上偏 3 已有 10）。
         [self spacer:stack size:FMGridMargin-FMGridEdgePx-FMGridGapPx];
         UIView *gridGlass=[self.panel viewWithTag:9230];
@@ -4199,35 +4207,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         CGFloat cell=FMGridCell(gridGlass?gridGlass.bounds.size.width:260,cols);
         CGFloat icon=MIN(FMGridIconSize(),cell);
         CGFloat inner=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
-        if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
-            [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
-        }
-        if(hiddenApps.count && _hiddenAppsExpanded) {
-            // The grid manages hidden apps in its own horizontal strip under the
-            // bar: tap a locked icon to bring the app back into the grid.
-            UIScrollView *strip=[[UIScrollView alloc] initWithFrame:CGRectMake(0,0,inner,cell+6)];
-            strip.showsHorizontalScrollIndicator=NO;
-            strip.alwaysBounceHorizontal=NO;
-            CGFloat total=MAX(inner,(CGFloat)hiddenApps.count*(cell+gap));
-            UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,total,cell+6)];
-            NSUInteger hiddenIndex=0;
-            for(NSDictionary *app in hiddenApps) {
-                UIControl *hCell=[[UIControl alloc] initWithFrame:CGRectMake(edge+hiddenIndex*(cell+gap),3,cell,cell)];
-                UIView *hiddenIcon=[self iconViewForApp:app size:icon];
-                hiddenIcon.frame=CGRectMake((cell-icon)*.5,(cell-icon)*.5,icon,icon);
-                [hCell addSubview:hiddenIcon];
-                objc_setAssociatedObject(hCell,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                [hCell addTarget:self action:@selector(toggleAppHideFromCell:)
-                    forControlEvents:UIControlEventTouchUpInside];
-                [line addSubview:hCell];
-                hiddenIndex++;
-            }
-            strip.contentSize=CGSizeMake(total,cell+6);
-            [strip addSubview:line];
-            [self addRow:strip height:cell+6 to:stack];
-        }
-        // Hidden apps live in the strip above, so the grid itself stays clean.
-        NSArray<NSDictionary *> *gridApps=(_hiddenAppsExpanded && hiddenApps.count)?normalApps:displayApps;
+        // 展开时隐藏应用回到正常顺序里，跟着网格顺排，不再单独开一条滚动区。
+        NSArray<NSDictionary *> *gridApps=displayApps;
         NSUInteger index=0;
         while(index<gridApps.count) {
             NSUInteger span=MIN((NSUInteger)cols,gridApps.count-index);
@@ -4279,6 +4260,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             }
             [self addRow:line height:cell to:stack];
             index+=span;
+        }
+        // 收起时的叠卡：另起一行、贴着第一个格位，向右叠放，不占用网格。
+        if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
+            [self addRow:[self gridHiddenDeckView:hiddenApps cell:cell icon:icon edge:edge] height:cell to:stack];
         }
     } else if(FMMenuCompact()) {
         // 精简的角标仍以图标角点为圆心，首行要按图标尺寸补一点顶部留白，
@@ -4486,6 +4471,44 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     ]];
     [bar addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
     return bar;
+}
+
+// 宫格隐藏区：横向叠卡。每张露出格子的 30%，最多 6 张，超出用 +N 收尾。
+// 方向与列表/精简的纵向叠卡对应，只是旋转了 90°。
+- (UIView *)gridHiddenDeckView:(NSArray<NSDictionary *> *)hiddenApps
+                          cell:(CGFloat)cell icon:(CGFloat)icon edge:(CGFloat)edge {
+    UIControl *deck=[UIControl new];
+    deck.translatesAutoresizingMaskIntoConstraints=NO;
+    deck.backgroundColor=UIColor.clearColor;
+    CGFloat step=MAX(10,cell*.30);
+    CGFloat top=(cell-icon)*.5;
+    NSUInteger maxCards=6;
+    BOOL overflow=hiddenApps.count>maxCards;
+    NSUInteger shown=overflow?maxCards-1:hiddenApps.count;
+    for(NSUInteger i=0;i<shown;i++) {
+        UIView *card=[self iconViewForApp:hiddenApps[i] size:icon];
+        card.frame=CGRectMake(edge+i*step,top,icon,icon);
+        card.userInteractionEnabled=NO;
+        [deck addSubview:card];
+    }
+    if(overflow) {
+        UIView *more=[[UIView alloc] initWithFrame:CGRectMake(edge+shown*step,top,icon,icon)];
+        more.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.92];
+        more.layer.cornerRadius=icon*.225;
+        if(@available(iOS 13.0,*)) more.layer.cornerCurve=kCACornerCurveContinuous;
+        more.userInteractionEnabled=NO;
+        UILabel *count=[self label:[NSString stringWithFormat:@"+%lu",(unsigned long)(hiddenApps.count-shown)]
+                               size:MAX(11,icon*.28) weight:UIFontWeightSemibold];
+        count.textAlignment=NSTextAlignmentCenter;
+        count.textColor=FMThemeColor(FMColorSecondary);
+        count.frame=more.bounds;
+        [more addSubview:count];
+        [deck addSubview:more];
+    }
+    deck.accessibilityLabel=[NSString stringWithFormat:@"已隐藏 %lu 个应用，轻点展开",(unsigned long)hiddenApps.count];
+    deck.accessibilityTraits=UIAccessibilityTraitButton;
+    [deck addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
+    return deck;
 }
 
 - (UIView *)standardHiddenAppsStackView:(NSArray<NSDictionary *> *)hiddenApps {
