@@ -4254,9 +4254,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     [NSLayoutConstraint activateConstraints:@[
                         [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-badge*.5],
+                            constant:icon*.5-badge*.5+1.5],
                         [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5+badge*.5],
+                            constant:-icon*.5+badge*.5-1.5],
                         [close.widthAnchor constraintEqualToConstant:badge],
                         [close.heightAnchor constraintEqualToConstant:badge],
                         [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
