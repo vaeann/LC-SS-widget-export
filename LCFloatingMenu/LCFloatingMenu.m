@@ -3911,7 +3911,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     self.panelFooterHeight=footerHeight;
     CGFloat gridCell=FMGridCell(pw,gridCols);
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
-    CGFloat target=small?(grid?top+bottom+10+(CGFloat)gridRows*(gridCell+6+4):
+    CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+6+4):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
     if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell+6:[self appRowHeight])));
@@ -4167,8 +4167,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(FMMenuGrid()) {
         // Grid layout: square icon cells, no captions; columns adapt to the
         // icon-size slider. Same data source and tap/close handling as the rows.
-        // 顶部留白：关闭角标以图标角点为圆心，上沿会高出图标 12.5，第一行需要让位。
-        [self spacer:stack size:6];
         UIView *gridGlass=[self.panel viewWithTag:9230];
         int cols=FMGridColumns();
         CGFloat gap=FMGridGapPx,edge=FMGridEdgePx;
@@ -4256,9 +4254,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     [NSLayoutConstraint activateConstraints:@[
                         [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5],
+                            constant:icon*.5-badge*.5],
                         [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5],
+                            constant:-icon*.5+badge*.5],
                         [close.widthAnchor constraintEqualToConstant:badge],
                         [close.heightAnchor constraintEqualToConstant:badge],
                         [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
@@ -4273,6 +4271,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             index+=span;
         }
     } else if(FMMenuCompact()) {
+        // 精简的角标仍以图标角点为圆心，首行要按图标尺寸补一点顶部留白，
+        // 否则白环上沿会被视口压掉一截。
+        CGFloat compactIcon=FMMenuStyleValue(@"menuCompactIconSize");
+        CGFloat compactBadge=MIN(22,MAX(16,compactIcon*.38));
+        CGFloat compactPad=MAX(0,compactBadge*.5+1.5-(63-compactIcon)*.5);
+        if(compactPad>.5) [self spacer:stack size:compactPad];
         if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
             [self addRow:[self compactHiddenCollapseBarWithCount:hiddenApps.count] height:22 to:stack];
         }
@@ -7472,7 +7476,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _favorites=_compact?@[]:pinned;
     _headroom=headroom;
     _listTop=headroom+(_compact?0:[manager menuHeaderDepth]);
-    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:(_grid?10+2*(rowHeight+4):3*(rowHeight+4)));
+    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:(_grid?2*(rowHeight+4):3*(rowHeight+4)));
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
     if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
@@ -7638,7 +7642,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             // cannot be clipped — the icons still land on the same pixel rows.
             CGFloat pitch=cell+4;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(FMGridPad,top+10+rowIndex*pitch,rowW,pitch)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(FMGridPad,top+rowIndex*pitch,rowW,pitch)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *iconView=[self iconForSlot:slot size:icon apps:apps];

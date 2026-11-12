@@ -18,8 +18,9 @@ assert "cellView.enabled=!" not in compact, "a disabled cell would swallow the c
 assert "row.enabled=![LCOrbitGuestService isCurrentGuest:app]" not in compact, "compact rows must stay enabled so their badge stays tappable"
 grid=compact[compact.index("if(FMMenuGrid()) {"):compact.index("} else if(FMMenuCompact()) {")]
 assert "CGFloat badge=MIN(22,MAX(16,icon*.38));" in grid, "grid badge must scale with the icon inside a 16-22pt band"
-assert "constant:icon*.5]" in grid and "constant:-icon*.5]" in grid, "grid badge center must sit on the icon corner, not on a fixed 24pt box"
+assert "constant:icon*.5-badge*.5" in grid and "constant:-icon*.5+badge*.5" in grid, "grid badge must stay inside the icon so the drawer rim stays clear"
 assert "[ring.widthAnchor constraintEqualToConstant:badge+3]" in grid, "grid badge must keep its white rim"
+assert "[self spacer:stack size:compactPad];" in compact, "compact first row needs a top pad so the badge rim is not clipped"
 close=src[src.index("- (void)closeApp:"):src.index("- (void)restart {",src.index("- (void)closeApp:"))]
 assert "UIAlertController" not in close, "task close must not ask for confirmation"
 assert "[row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]" in compact, "compact app row must fill actual scroll width"
