@@ -4707,6 +4707,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         tile.layer.shadowColor=UIColor.blackColor.CGColor;
         tile.layer.shadowOpacity=FMMenuDark()?.20:.09;
         tile.layer.shadowRadius=3;
+    tile.layer.shadowOffset=CGSizeZero;
+        tile.layer.shadowOffset=CGSizeZero;
         [button addSubview:tile];
         UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
            configurationWithPointSize:compact?23:22 weight:UIImageSymbolWeightSemibold];
@@ -7628,6 +7630,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     tile.layer.shadowColor=UIColor.blackColor.CGColor;
     tile.layer.shadowOpacity=dark?.20:.09;
     tile.layer.shadowRadius=3;
+    tile.layer.shadowOffset=CGSizeZero;
     UIImageSymbolConfiguration *configuration=[UIImageSymbolConfiguration
         configurationWithPointSize:compact?23:22 weight:UIImageSymbolWeightSemibold];
     UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
