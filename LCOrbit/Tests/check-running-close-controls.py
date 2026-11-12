@@ -11,15 +11,15 @@ assert "CGFloat badge=MIN(22,MAX(16,iconSize*.38));" in compact, "compact badge 
 assert "[close.centerXAnchor constraintEqualToAnchor:container.centerXAnchor" in compact and "constant:iconSize*.5]" in compact, "compact badge center must sit on the icon top-right corner"
 assert "[close.centerYAnchor constraintEqualToAnchor:container.centerYAnchor" in compact and "constant:-iconSize*.5]" in compact, "compact badge center must sit on the icon top edge"
 assert "[close.widthAnchor constraintEqualToConstant:badge]" in compact, "compact badge diameter must come from the badge, not the panel scale"
-assert "ring.backgroundColor=UIColor.whiteColor" in compact and "[ring.widthAnchor constraintEqualToConstant:badge+3]" in compact, "compact badge must keep its white rim"
+assert "ring.backgroundColor" not in compact, "compact badge is drawn without a white rim"
 assert "48/MAX(.50,self.panelContentScale?:1)" in src, "enlarged normal close targets must preserve 48 screen points independently of switching"
 assert "height:63+closeSize" not in compact, "running apps must not add a close row"
 assert "cellView.enabled=!" not in compact, "a disabled cell would swallow the close badge of the running app"
 assert "row.enabled=![LCOrbitGuestService isCurrentGuest:app]" not in compact, "compact rows must stay enabled so their badge stays tappable"
 grid=compact[compact.index("if(FMMenuGrid()) {"):compact.index("} else if(FMMenuCompact()) {")]
 assert "CGFloat badge=MIN(22,MAX(16,icon*.38));" in grid, "grid badge must scale with the icon inside a 16-22pt band"
-assert "constant:icon*.5-badge*.5+1.5" in grid and "constant:-icon*.5+badge*.5-1.5" in grid, "grid badge must stay inside the icon so the drawer rim stays clear"
-assert "[ring.widthAnchor constraintEqualToConstant:badge+3]" in grid, "grid badge must keep its white rim"
+assert "constant:icon*.5-badge*.5+2" in grid and "constant:-icon*.5+badge*.5-2" in grid, "grid badge must stay inside the icon so the drawer rim stays clear"
+assert "ring.backgroundColor" not in grid, "grid badge is drawn without a white rim"
 assert "[self spacer:stack size:compactPad];" in compact, "compact first row needs a top pad so the badge rim is not clipped"
 close=src[src.index("- (void)closeApp:"):src.index("- (void)restart {",src.index("- (void)closeApp:"))]
 assert "UIAlertController" not in close, "task close must not ask for confirmation"

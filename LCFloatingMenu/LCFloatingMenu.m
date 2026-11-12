@@ -4228,17 +4228,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [cellView addTarget:self action:@selector(switchFromRow:)
                     forControlEvents:UIControlEventTouchUpInside];
                 if([LCOrbitMultitask isRunningGuest:app]) {
-                    // 关闭角标：白描边 + 红底。旧版把 24pt 按钮贴在 right-2 / top-2，
-                    // 圆点在图标内偏左偏下（约 14 / 10），看着是"错位"；改成圆点中心
-                    // 对齐图标右上角内缩 2，四边等距。直径随图标缩放 16~22。
+                    // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
+                    // 微微冒头；直径随图标缩放 16~22。
                     CGFloat badge=MIN(22,MAX(16,icon*.38));
-                    UIView *ring=[[UIView alloc] initWithFrame:CGRectMake(0,0,badge+3,badge+3)];
-                    ring.translatesAutoresizingMaskIntoConstraints=NO;
-                    ring.userInteractionEnabled=NO;
-                    ring.backgroundColor=UIColor.whiteColor;
-                    ring.layer.cornerRadius=(badge+3)*.5;
-                    ring.layer.cornerCurve=kCACornerCurveCircular;
-                    [cellView addSubview:ring];
                     UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                     close.translatesAutoresizingMaskIntoConstraints=NO;
                     UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration
@@ -4254,15 +4246,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [cellView addSubview:close];
                     [NSLayoutConstraint activateConstraints:@[
                         [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-badge*.5+1.5],
+                            constant:icon*.5-badge*.5+2],
                         [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5+badge*.5-1.5],
+                            constant:-icon*.5+badge*.5-2],
                         [close.widthAnchor constraintEqualToConstant:badge],
-                        [close.heightAnchor constraintEqualToConstant:badge],
-                        [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
-                        [ring.centerYAnchor constraintEqualToAnchor:close.centerYAnchor],
-                        [ring.widthAnchor constraintEqualToConstant:badge+3],
-                        [ring.heightAnchor constraintEqualToConstant:badge+3]
+                        [close.heightAnchor constraintEqualToConstant:badge]
                     ]];
                 }
                 [line addSubview:cellView];
@@ -4332,15 +4320,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [row.topAnchor constraintEqualToAnchor:container.topAnchor],
                     [row.heightAnchor constraintEqualToConstant:63]
                 ]];
-                // 与宫格同款角标：白描边 + 红底，圆心钉在图标右上角内缩 2。
+                // 与宫格同款角标：红底无描边，圆心钉在图标右上角。
                 CGFloat badge=MIN(22,MAX(16,iconSize*.38));
-                UIView *ring=[[UIView alloc] initWithFrame:CGRectMake(0,0,badge+3,badge+3)];
-                ring.translatesAutoresizingMaskIntoConstraints=NO;
-                ring.userInteractionEnabled=NO;
-                ring.backgroundColor=UIColor.whiteColor;
-                ring.layer.cornerRadius=(badge+3)*.5;
-                ring.layer.cornerCurve=kCACornerCurveCircular;
-                [container addSubview:ring];
                 UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
                 UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:badge weight:UIImageSymbolWeightSemibold];
@@ -4356,11 +4337,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [close.centerYAnchor constraintEqualToAnchor:container.centerYAnchor
                         constant:-iconSize*.5],
                     [close.widthAnchor constraintEqualToConstant:badge],
-                    [close.heightAnchor constraintEqualToConstant:badge],
-                    [ring.centerXAnchor constraintEqualToAnchor:close.centerXAnchor],
-                    [ring.centerYAnchor constraintEqualToAnchor:close.centerYAnchor],
-                    [ring.widthAnchor constraintEqualToConstant:badge+3],
-                    [ring.heightAnchor constraintEqualToConstant:badge+3]
+                    [close.heightAnchor constraintEqualToConstant:badge]
                 ]];
                 [self addRow:container height:63 to:stack];
             } else [self addRow:row height:63 to:stack];
