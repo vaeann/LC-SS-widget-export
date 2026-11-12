@@ -244,15 +244,16 @@ static int FMGridColumns(void) {
     int n=v?[v intValue]:1;
     return 3+MAX(0,MIN(2,n));
 }
-// 宫格留白预算：面板宽固定 260 不动，靠压缩间距把图标做大（每列上限 +5）。
-//   左右边距 5（旧 12）· 列间距 7（旧 10）· 格子边框 3（不变）
-// 换算结果：3 列格子 76.67 / 4 列 55.75 / 5 列 43.2，图标 = MIN(滑杆, 格子)。
+// 宫格留白预算：面板宽固定 260，图标区到抽屉四边的距离统一为 14，行列间距统一为 7。
+//   边距 14 · 间距 7 · 行内上偏 3（cellView y）
+// 换算结果：3 列 72.67 / 4 列 52.75 / 5 列 40.8，图标 = MIN(滑杆, 格子)。
 // 真实面板、面板高度估算、设置页预览三处都走这一份公式，避免各处漂移。
-static const CGFloat FMGridPad=5;
+static const CGFloat FMGridMargin=14;
 static const CGFloat FMGridGapPx=7;
 static const CGFloat FMGridEdgePx=3;
+static const CGFloat FMGridPad=0;
 static CGFloat FMGridCell(CGFloat width,int cols) {
-    return (width-FMGridPad*2-FMGridEdgePx*2-(CGFloat)(cols-1)*FMGridGapPx)/(CGFloat)cols;
+    return (width-FMGridMargin*2-(CGFloat)(cols-1)*FMGridGapPx)/(CGFloat)cols;
 }
 static CGFloat FMGridIconSize(void) {
     return Clamp(FloatPref(@"menuGridIconSize",42),24,65);
@@ -3934,7 +3935,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     self.panelFooterHeight=footerHeight;
     CGFloat gridCell=FMGridCell(pw,gridCols);
     NSUInteger gridRows=MIN(5,MAX(1,(appCount+(NSUInteger)gridCols)/(NSUInteger)gridCols));
-    CGFloat target=small?(grid?top+bottom+(CGFloat)gridRows*(gridCell+6+4):
+    CGFloat target=small?(grid?top+bottom+FMGridMargin*2+(CGFloat)gridRows*(gridCell+FMGridGapPx):
         (compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4))):610;
     if(small) target=MAX(target,top+bottom+(compact?63:(grid?gridCell+6:[self appRowHeight])));
@@ -3998,19 +3999,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    scroll.contentInset=UIEdgeInsetsMake(0,0,4,0);
+    scroll.contentInset=UIEdgeInsetsMake(0,0,grid?FMGridMargin:4,0);
     [FMGlassContent(glass) addSubview:scroll];
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(self.panelShowsHeader) [self buildAppHeader:glass];
-        // 宫格用更窄的边距把省下的宽度全给格子（列表/精简保持原样）。
+        // 宫格的滚动层满幅，边距交给行内统一的 14；列表/精简保持原样。
         scroll.frame=CGRectMake(grid?FMGridPad:(compact?3:12),top,
                                 pw-(grid?FMGridPad*2:(compact?6:24)),ph-top-bottom);
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
     UIStackView *stack=[self stack];
-    stack.spacing=small?(compact?3:4):10;
+    stack.spacing=small?(compact?3:(grid?FMGridGapPx:4)):10;
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
@@ -4190,9 +4191,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(FMMenuGrid()) {
         // Grid layout: square icon cells, no captions; columns adapt to the
         // icon-size slider. Same data source and tap/close handling as the rows.
+        // 四边 14：顶部靠 spacer 补到 14（行距 7 + 行内上偏 3 已有 10）。
+        [self spacer:stack size:FMGridMargin-FMGridEdgePx-FMGridGapPx];
         UIView *gridGlass=[self.panel viewWithTag:9230];
         int cols=FMGridColumns();
-        CGFloat gap=FMGridGapPx,edge=FMGridEdgePx;
+        CGFloat gap=FMGridGapPx,edge=FMGridMargin;
         CGFloat cell=FMGridCell(gridGlass?gridGlass.bounds.size.width:260,cols);
         CGFloat icon=MIN(FMGridIconSize(),cell);
         CGFloat inner=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
@@ -7470,7 +7473,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _favorites=_compact?@[]:pinned;
     _headroom=headroom;
     _listTop=headroom+(_compact?0:[manager menuHeaderDepth]);
-    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:(_grid?2*(rowHeight+4):3*(rowHeight+4)));
+    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:(_grid?FMGridMargin*2+2*rowHeight+FMGridGapPx:3*(rowHeight+4)));
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
     if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
@@ -7627,16 +7630,14 @@ static UIView *FMDockCard(UIStackView *rows) {
             // Same cell formula as the real drawer; while a slider drags, the
             // card size stays locked and the icon scales inside its old cell.
             int cols=FMGridColumns();
-            CGFloat gap=FMGridGapPx,edge=FMGridEdgePx;
+            CGFloat gap=FMGridGapPx,edge=FMGridMargin;
             CGFloat cell=FMGridCell(_pw,cols);
             CGFloat icon=MIN(FMGridIconSize(),cell);
             CGFloat rowW=(CGFloat)cols*cell+(CGFloat)(cols-1)*gap+2*edge;
-            // Real drawer pitch: row constrained to cell + 4pt stack spacing. The row
-            // view here is 4pt taller than cell only so the icon's 3pt top inset
-            // cannot be clipped — the icons still land on the same pixel rows.
-            CGFloat pitch=cell+4;
+            // 行距 = 间距 7；首行图标顶部离卡片 14（行内上偏 3 + 11 起点）。
+            CGFloat pitch=cell+gap;
             for(NSUInteger rowIndex=0;rowIndex<2;rowIndex++) {
-                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(FMGridPad,top+rowIndex*pitch,rowW,pitch)];
+                UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,top+11+rowIndex*pitch,rowW,pitch)];
                 for(int col=0;col<cols;col++) {
                     NSUInteger slot=rowIndex*(NSUInteger)cols+(NSUInteger)col;
                     UIView *iconView=[self iconForSlot:slot size:icon apps:apps];
