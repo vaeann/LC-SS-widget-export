@@ -4673,7 +4673,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *separator=FMMakeGlowSeparator(CGRectMake(13,0,footer.bounds.size.width-26,1.0));
         [footer addSubview:separator];
     }
-    CGFloat slot=compact?(height-4)/MAX(1,items.count):footer.bounds.size.width/items.count;
+    // 精简：上下各留 4，槽位才关于水平中线对称（只减顶部 4 会让按钮整体偏上/偏下 2pt）。
+    CGFloat slot=compact?(height-8)/MAX(1,items.count):footer.bounds.size.width/items.count;
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
         CGRect hit=compact?
@@ -7673,7 +7674,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         [bar addSubview:divider];
         [dividers addObject:divider];
         UIView *home=[self footerTile:@"house.fill" compact:YES size:50];
-        home.center=CGPointMake(width*.5,4+(76-4)*.5);
+        home.center=CGPointMake(width*.5,38);
         [bar addSubview:home];
         [items addObject:home];
     } else {
