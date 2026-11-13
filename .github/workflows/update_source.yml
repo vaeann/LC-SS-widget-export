@@ -49,6 +49,10 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         tag_name: "1.0"
+        # 这条 Release 只是 AltStore 源索引（apps.json）的容器，不是插件发布。
+        # 不设 make_latest 的话，它会抢走插件正式版的 Latest 标记。
+        name: "AltStore 源索引（非插件）"
+        make_latest: "false"
         files: |
           .github/apps.json
           .github/apps_ss_lc.json
