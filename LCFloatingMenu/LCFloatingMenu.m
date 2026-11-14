@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b1"
+#define FM_MENU_VERSION @"1.0.36v31b2"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2133,6 +2133,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CFTimeInterval _morphFrameAt,_morphFrameTick;
     CGFloat _morphShownT,_morphShownStretch;
     CGFloat _morphBeadAlpha,_morphShadow,_morphElapsed,_panelDragStart;
+    // 面板常驻：收起后不再拆掉，下一次展开只做形态动画，省掉 400ms 的建面板开销。
+    BOOL _panelWarm;
+    NSString *_panelWarmSignature;
     CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
     CADisplayLink *_morphLink;
@@ -2674,6 +2677,20 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     FMLog(@"settings-gesture",@"panel-long-press");
     [self openSettings];
 }
+// 面板内容签名：布局/尺寸/主题/每个 App 的隐藏与运行状态，任一变化都必须重建。
+- (NSString *)panelSignature {
+    NSMutableString *signature=[NSMutableString string];
+    CGSize screen=self.window?self.window.bounds.size:CGSizeZero;
+    [signature appendFormat:@"m=%ld dark=%d glass=%d scale=%.2f screen=%.0fx%.0f",
+        (long)FMMenuLayout(),FMMenuDark()?1:0,FMClearGlassEnabled()?1:0,
+        self.panelContentScale,screen.width,screen.height];
+    for(NSDictionary *app in self.apps) {
+        [signature appendFormat:@"|%@:%d%d",app[@"identity"],
+            [app[@"hidden"] boolValue]?1:0,[LCOrbitMultitask isRunningGuest:app]?1:0];
+    }
+    return signature;
+}
+
 // 图标预热：后台把当前清单的图标读进 NSCache，下一次展开不再等磁盘。
 - (void)prewarmIcons {
     NSArray<NSDictionary *> *apps=self.apps;
@@ -2705,9 +2722,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         return;
     }
     [self removePanel];
+    _panelWarm=NO;
     [self drawOrb];
     if(self.isOpen) {
         [self buildPanel];
+        // 记下这块面板对应的数据签名：之后只要数据没变就能直接复用。
+        _panelWarmSignature=[self panelSignature];
+        _panelWarm=self.panel!=nil;
         // A transient scene with no panel space must keep a usable edge tab.
         if(!self.panel) {
             self.isOpen=NO;
@@ -3028,12 +3049,25 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         [self scheduleOrbFade];
     }
     if(opening) {
-        [self draw];
-        // 展开耗时打点：scan=清单 log=状态 build=建面板 total=整体
+        // 面板常驻：内容没变就直接复用，build 记为 0。
+        NSString *signature=[self panelSignature];
+        BOOL reuse=self.panel && self.orb && _panelWarm &&
+                   [signature isEqualToString:_panelWarmSignature?:@""];
+        CFTimeInterval buildMs=0;
+        if(reuse) {
+            self.panel.hidden=NO;
+            self.panel.userInteractionEnabled=NO;
+            if(self.dismissLayer) self.dismissLayer.hidden=NO;
+            [self.overlayView bringSubviewToFront:self.orb];
+        } else {
+            [self draw];
+            buildMs=(CACurrentMediaTime()-t2)*1000;
+        }
+        // 展开耗时打点：scan=清单 log=状态 build=建面板 total=整体 reuse=是否复用
         FMLogDeferred(@"open-timing",[NSString stringWithFormat:
-            @"scan=%.1f log=%.1f build=%.1f total=%.1f",
-            t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,
-            (CACurrentMediaTime()-t2)*1000,t0>0?(CACurrentMediaTime()-t0)*1000:0]);
+            @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d",
+            t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,buildMs,
+            t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0]);
         [self prewarmIcons];
         if(self.panel && self.orb) [self morphDrawerOpen:YES];
     } else if(self.panel && self.orb) {
@@ -3290,8 +3324,24 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         self.orb.alpha=1;
         [self scheduleOrbFade];
     } else {
-        _drawDeferred=NO;
-        [self draw];
+        if(_drawDeferred) {
+            _drawDeferred=NO;
+            [self draw];
+            return;
+        }
+        // 面板留在原地（已收缩到 progress 0），隐藏但不销毁：下次展开只跑动画。
+        _panelWarm=self.panel!=nil;
+        self.panel.hidden=YES;
+        self.panel.userInteractionEnabled=NO;
+        if(self.dismissLayer) {
+            self.dismissLayer.hidden=YES;
+            self.dismissLayer.userInteractionEnabled=NO;
+        }
+        self.orb.userInteractionEnabled=YES;
+        self.orb.accessibilityElementsHidden=NO;
+        self.orbFaded=NO;
+        self.orb.alpha=self.orbNormalAlpha?:.72;
+        [self scheduleOrbFade];
     }
 }
 // Skips the rest of a settle: used when a new gesture arrives mid-flight.
@@ -4851,6 +4901,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                           scroll.adjustedContentInset.bottom);
     [scroll setContentOffset:CGPointMake(0,MIN(MAX(0,saved),maxY)) animated:NO];
     self.appsScrollRestorePending=NO;
+    // 内容已就地重建，签名跟着更新，收起后仍可复用。
+    _panelWarmSignature=[self panelSignature];
 }
 - (void)requestAppsRefresh {
     // didActivateWindow and forgetWindow may notify during one close. Merge
