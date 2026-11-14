@@ -12,6 +12,8 @@ typedef NS_ENUM(NSInteger, LCOrbitGuestError) {
 // Use this for listing, favorites and plugin assignments, not launch permission.
 // Each item carries a scope-aware identity, launchable flag and concise status.
 + (NSArray<NSDictionary*> *)installedApps;
+// 安装/隐藏/锁定发生变化后调用，下一次 installedApps 会重新扫描。
++ (void)invalidateInstalledAppsCache;
 // Only for callers that specifically require a validated quick-launch target.
 + (NSArray<NSDictionary*> *)launchableApps;
 + (NSArray<NSString*> *)inventoryDiagnostics;

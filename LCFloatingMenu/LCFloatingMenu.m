@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v30"
+#define FM_MENU_VERSION @"1.0.36v31b1"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -346,6 +346,17 @@ static void FMLog(NSString *event, NSString *detail) {
 // Public Guest APIs are implemented in LCOrbitGuestService for all future modules.
 static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService installedApps]; }
 
+// 高频事件（展开/收起/滚动位置/布局）改走后台串行队列。
+// appendEvent 是「加锁 + 读整个 JSON + 原子写回」，一次展开 3~4 条会吃掉几十毫秒。
+static void FMLogDeferred(NSString *event,id details) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{
+        queue=dispatch_queue_create("fm.log.deferred",DISPATCH_QUEUE_SERIAL);
+    });
+    dispatch_async(queue,^{ FMLog(event,details); });
+}
+
 static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
     NSString *folder=app[@"folder"];
     if(![folder isKindOfClass:NSString.class] || !folder.length) return NO;
@@ -363,6 +374,7 @@ static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
         format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];
     BOOL ok=data && [data writeToFile:file options:NSDataWritingAtomic error:&error];
     if(ok) {
+        [LCOrbitGuestService invalidateInstalledAppsCache];
         FMLog(@"app-hide-toggle",[NSString stringWithFormat:@"app=%@ hidden=%d",FMAppKey(app),hidden]);
     }
     return ok;
@@ -2412,19 +2424,19 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     id old=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
     if(![old isKindOfClass:NSNumber.class] || fabs([old doubleValue]-y)>.5) {
         SetPref(@"appsScrollOffset",@(y));
-        FMLog(@"apps-scroll-saved",[NSString stringWithFormat:@"offset=%.1f",y]);
+        FMLogDeferred(@"apps-scroll-saved",[NSString stringWithFormat:@"offset=%.1f",y]);
     }
 }
 - (void)loadAppsScroll {
     if(BoolPref(@"recentAppsFirst",NO)) {
         self.appsScrollOffset=0;
-        FMLog(@"apps-scroll-reset",@"recent-apps-first");
+        FMLogDeferred(@"apps-scroll-reset",@"recent-apps-first");
         return;
     }
     id saved=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
     if([saved isKindOfClass:NSNumber.class] && isfinite([saved doubleValue])) {
         self.appsScrollOffset=MAX(0,[saved doubleValue]);
-        FMLog(@"apps-scroll-loaded",[NSString stringWithFormat:@"offset=%.1f",self.appsScrollOffset]);
+        FMLogDeferred(@"apps-scroll-loaded",[NSString stringWithFormat:@"offset=%.1f",self.appsScrollOffset]);
     }
 }
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
@@ -2662,6 +2674,18 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     FMLog(@"settings-gesture",@"panel-long-press");
     [self openSettings];
 }
+// 图标预热：后台把当前清单的图标读进 NSCache，下一次展开不再等磁盘。
+- (void)prewarmIcons {
+    NSArray<NSDictionary *> *apps=self.apps;
+    if(!apps.count) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+        for(NSDictionary *app in apps) {
+            UIImage *image=FMGuestIcon(app);
+            (void)image;
+        }
+    });
+}
+
 - (void)draw {
     if(!self.window) return;
     // 面板一出现就把触感引擎预热，第一次点图标也不会晚半拍。
@@ -2951,7 +2975,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
 }
 - (void)announceDrawerState {
-    FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
+    FMLogDeferred(self.isOpen?@"menu-open":@"menu-close",nil);
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
     if(BoolPref(@"haptic",YES)) {
@@ -2982,7 +3006,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(_morphActive) return;
     [self endScrubAnimated:NO];
     BOOL opening=!self.isOpen;
+    CFTimeInterval t0=0,t1=0,t2=0;
     if(opening) {
+        t0=CACurrentMediaTime();
         [self cancelOrbFade];
         [self loadAppsScroll];
     } else {
@@ -2991,9 +3017,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) {
         self.apps=InstalledApps();
+        t1=CACurrentMediaTime();
         [self rememberCurrentApp];
     }
     [self announceDrawerState];
+    t2=CACurrentMediaTime();
     if(!opening) {
         self.orbFaded=NO;
         self.orb.alpha=self.orbNormalAlpha?:0.72;
@@ -3001,6 +3029,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
     if(opening) {
         [self draw];
+        // 展开耗时打点：scan=清单 log=状态 build=建面板 total=整体
+        FMLogDeferred(@"open-timing",[NSString stringWithFormat:
+            @"scan=%.1f log=%.1f build=%.1f total=%.1f",
+            t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,
+            (CACurrentMediaTime()-t2)*1000,t0>0?(CACurrentMediaTime()-t0)*1000:0]);
+        [self prewarmIcons];
         if(self.panel && self.orb) [self morphDrawerOpen:YES];
     } else if(self.panel && self.orb) {
         [self morphDrawerOpen:NO];
@@ -4031,7 +4065,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     CGFloat ph=MIN(available/actualScale,target);
     if(!isfinite(ph) || ph<=0 || !isfinite(pw) || pw<=0) return;
     if(hostUI && small) {
-        FMLog(@"panel-layout",[NSString stringWithFormat:@"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu",
+        FMLogDeferred(@"panel-layout",[NSString stringWithFormat:@"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu",
             grid?@"grid":(compact?@"compact":@"normal"),pw,ph,safeBottom,
             (unsigned long)(compact?compactActions:2),(unsigned long)appCount]);
     }

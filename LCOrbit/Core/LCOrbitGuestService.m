@@ -60,6 +60,24 @@ static NSString *Status(NSString *reason) {
         @"locked":@"已锁定",@"hidden":@"已隐藏"};
     return labels[reason]?:@"";
 }
+// 清单缓存：两个根目录的 mtime 没变，就直接复用上次结果。
+// 每次展开都为每个 App 读 2 个 plist，是「点微珠要等半秒」的主要来源之一。
+static NSArray<NSDictionary *> *FMInventoryCache;
+static NSString *FMInventorySignature;
+static BOOL FMInventoryCacheValid;
+
+static NSString *FMInventorySignatureFor(NSArray<NSDictionary *> *roots,BOOL hostMultitask) {
+    NSMutableString *signature=[NSMutableString stringWithFormat:@"host=%d",hostMultitask?1:0];
+    NSFileManager *fm=NSFileManager.defaultManager;
+    for(NSDictionary *info in roots) {
+        NSString *path=info[@"path"];
+        NSDictionary *attributes=[fm attributesOfItemAtPath:path error:nil];
+        NSDate *modified=attributes[NSFileModificationDate];
+        [signature appendFormat:@"|%@|%.0f",path,modified?modified.timeIntervalSince1970:0];
+    }
+    return signature;
+}
+
 static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *diagnostics) {
     NSMutableArray<NSDictionary *> *list=[NSMutableArray array];
     BOOL hostMultitask=[LCOrbitMultitask isEnabled];
@@ -72,6 +90,11 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
     NSString *group=String([LCOrbitHost appGroupPath]);
     if(group.length) [roots addObject:@{@"path":[group stringByAppendingPathComponent:@"LiveContainer/Applications"],@"shared":@YES}];
     else [diagnostics addObject:@"inventory-error scope=shared reason=missing-app-group"];
+    NSString *signature=FMInventorySignatureFor(roots,hostMultitask);
+    if(FMInventoryCacheValid && [signature isEqualToString:FMInventorySignature]) {
+        [diagnostics addObject:@"inventory-cache hit"];
+        return FMInventoryCache;
+    }
     NSFileManager *fm=NSFileManager.defaultManager;
     NSMutableSet *seenFolders=[NSMutableSet set];
     for(NSDictionary *rootInfo in roots) {
@@ -148,6 +171,9 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
         NSComparisonResult order=[a[@"title"] localizedStandardCompare:b[@"title"]];
         return order==NSOrderedSame?[a[@"identity"] compare:b[@"identity"]]:order;
     }];
+    FMInventoryCache=[list copy];
+    FMInventorySignature=signature;
+    FMInventoryCacheValid=YES;
     return list;
 }
 static NSError *GuestError(LCOrbitGuestError code, NSString *description) {
@@ -199,6 +225,7 @@ static BOOL LaunchTarget(NSDictionary *target,NSError **error) {
 NSString *const LCOrbitGuestErrorDomain=@"LCOrbitGuestErrorDomain";
 @implementation LCOrbitGuestService
 + (NSArray<NSDictionary *> *)installedApps { return ScanInstalledApps(nil); }
++ (void)invalidateInstalledAppsCache { FMInventoryCacheValid=NO; }
 + (NSArray<NSDictionary *> *)launchableApps {
     NSMutableArray *result=[NSMutableArray array];
     for(NSDictionary *app in ScanInstalledApps(nil)) if(Flag(app[@"launchable"])) [result addObject:app];
