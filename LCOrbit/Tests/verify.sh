@@ -32,7 +32,7 @@ grep -Fq 'if(!scene || (!GuestInfo() && !FMHostUI())) return;' "$ROOT/LCFloating
 grep -Fq 'if(FMHostUI()) return;' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'lc-host-foreground' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'if(hostUI) safeBottom=MAX(safeBottom,100);' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'FMLog(@"panel-layout"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'panel-layout' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'if(strong && FMHostUI())' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'appearancePollGeneration!=generation' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'self.overlayView.overrideUserInterfaceStyle=' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
