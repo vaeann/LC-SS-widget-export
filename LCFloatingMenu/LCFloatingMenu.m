@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b4"
+#define FM_MENU_VERSION @"1.0.36v31b6"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2696,6 +2696,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         (long)FMMenuLayout(),FMMenuDark()?1:0,FMClearGlassEnabled()?1:0,
         self.panelContentScale,bounds.size.width,bounds.size.height,
         self.left?1:0,self.orbY,safeTop,safeBottom];
+    // 这里刻意不记「当前 App」：切换任务时它的变化可以用就地同步纠正（展开前调
+    // syncCloseBadges），记进签名会让每次切换都强制重建 400ms。
     for(NSDictionary *app in self.apps) {
         [signature appendFormat:@"|%@:%d%d",app[@"identity"],
             [app[@"hidden"] boolValue]?1:0,[LCOrbitMultitask isRunningGuest:app]?1:0];
@@ -3074,6 +3076,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                    [signature isEqualToString:_panelWarmSignature?:@""];
         CFTimeInterval buildMs=0;
         if(reuse) {
+            // 面板还藏着，先把运行标记对齐（切换任务后绿点要换位置）；此时重建不可见。
+            [self syncCloseBadges];
             self.panel.hidden=NO;
             self.panel.userInteractionEnabled=NO;
             if(self.dismissLayer) self.dismissLayer.hidden=NO;
@@ -3358,17 +3362,18 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             self.panel.center=_morphRestCenter;
         }
         _panelWarm=self.panel!=nil;
-        // 空闲 5 分钟后释放常驻面板：否则一整棵视图树（含全部图标）会一直挂着。
+        // 空闲 10 分钟后释放常驻面板：否则一整棵视图树（含全部图标）会一直挂着。
+        // 5 分钟太短，容易正好在用户下次点开之前释放掉，白等一次重建。
         NSUInteger token=++_panelReleaseToken;
         __weak typeof(self) weakSelf=self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(300*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(600*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
             __strong typeof(weakSelf) strongSelf=weakSelf;
             if(!strongSelf || strongSelf->_panelReleaseToken!=token) return;
             if(strongSelf.isOpen || !strongSelf->_panelWarm || !strongSelf.panel) return;
             [strongSelf removePanel];
             strongSelf->_panelWarm=NO;
             strongSelf->_panelWarmSignature=nil;
-            FMLogDeferred(@"panel-release",@"idle-5min");
+            FMLogDeferred(@"panel-release",@"idle-10min");
         });
         self.panel.hidden=YES;
         self.panel.userInteractionEnabled=NO;
@@ -3904,6 +3909,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(current) {
         CGFloat side=MIN(13,MAX(10,size*.30));
         UIView *light=FMRunningBreathingLight(side);
+        light.tag=9241;   // 当前 App 的呼吸灯，运行状态变化时就地同步
         light.frame=CGRectMake(size-side,size-side,side,side);
         light.userInteractionEnabled=NO;
         [box addSubview:light];
@@ -4946,14 +4952,20 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // 内容已就地重建，签名跟着更新，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
 }
-// 运行状态变化只影响关闭角标：就地显示/隐藏，不重建整页。
-// 整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
-// 只有"新任务启动 / 已关闭的任务重新跑起来，必须新建视图"时才退回整页重建。
+// 运行状态变化只影响两类标记：关闭角标与当前 App 的呼吸灯。
+// 就地增删/显隐，不重建整页——整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
+// 只有"新任务启动、原本没有角标"这种必须新建角标的情况，才退回整页重建。
 - (void)syncCloseBadges {
-    if(!self.appsScroll) return;
+    UIView *root=self.panel ?: self.appsScroll;
+    if(!root) return;
+    NSString *currentKey=nil;
+    for(NSDictionary *app in self.apps) {
+        if([LCOrbitGuestService isCurrentGuest:app]) { currentKey=FMAppKey(app); break; }
+    }
     NSMutableArray<UIView *> *nodes=[NSMutableArray array];
+    NSMutableArray<UIView *> *lights=[NSMutableArray array];
     NSMutableDictionary<NSString *,UIView *> *badges=[NSMutableDictionary dictionary];
-    NSMutableArray<UIView *> *pending=[NSMutableArray arrayWithArray:self.appsScroll.subviews];
+    NSMutableArray<UIView *> *pending=[NSMutableArray arrayWithArray:root.subviews];
     while(pending.count) {
         UIView *view=pending.lastObject;
         [pending removeLastObject];
@@ -4961,21 +4973,47 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(view.tag==9240) {
             NSDictionary *app=objc_getAssociatedObject(view,@selector(closeTaskFromButton:));
             if(app) badges[FMAppKey(app)]=view;
+        } else if(view.tag==9241) {
+            [lights addObject:view];
         }
         [pending addObjectsFromArray:view.subviews];
     }
+    // 绿点按实例处理：同一个 App 可能同时出现在顶栏收藏和列表里，字典按 key 去重
+    // 只会摘掉其中一个，另一个会一直留在旧图标上。
+    for(UIView *light in lights) {
+        NSDictionary *app=objc_getAssociatedObject(light.superview,@selector(switchFromRow:));
+        if(!app || !currentKey || ![FMAppKey(app) isEqualToString:currentKey])
+            [light removeFromSuperview];
+    }
+    // 当前 App 就地补绿点：为了一个圆点重建整页不值得。
+    // 只补在图标盒子（tag 9233）上，容器层会递归命中同一个绿点造成重复。
+    if(currentKey) {
+        for(UIView *view in nodes) {
+            if(view.tag!=9233) continue;
+            NSDictionary *app=objc_getAssociatedObject(view,@selector(switchFromRow:));
+            if(!app || ![FMAppKey(app) isEqualToString:currentKey]) continue;
+            if([view viewWithTag:9241]) continue;
+            CGFloat size=CGRectGetWidth(view.bounds);
+            if(size<8) continue;
+            CGFloat side=MIN(13,MAX(10,size*.30));
+            UIView *light=FMRunningBreathingLight(side);
+            light.tag=9241;
+            light.frame=CGRectMake(size-side,size-side,side,side);
+            light.userInteractionEnabled=NO;
+            [view addSubview:light];
+        }
+    }
+    // 角标只在"从来没有过"时才需要重建；刚被隐藏的不算——关闭是异步的，
+    // LC 的运行状态可能还短暂为真，那样会在点完 X 的瞬间闪一次整页重建。
     BOOL missing=NO;
     for(UIView *view in nodes) {
         if(view.tag==9240) continue;
         NSDictionary *app=objc_getAssociatedObject(view,@selector(switchFromRow:));
         if(!app || ![LCOrbitMultitask isRunningGuest:app]) continue;
-        UIView *badge=badges[FMAppKey(app)];
-        // 角标不存在，或者刚被关掉还藏着，但任务又在运行：只能重建才能补出新角标。
-        if(!badge || badge.hidden) { missing=YES; break; }
+        if(!badges[FMAppKey(app)]) { missing=YES; break; }
     }
     if(missing) { [self refreshAppsContent]; return; }
-    // 只隐藏、不主动显示：关闭是异步的，LC 的 isAppRunning 可能还短暂为真，
-    // 若这里反向恢复就会让角标"闪回来"。恢复显示统一交给重建。
+    // 只隐藏、不主动显示：恢复显示交给重建，避免关闭动画期间把角标"闪回来"。
     for(NSString *key in badges) {
         UIView *badge=badges[key];
         NSDictionary *app=objc_getAssociatedObject(badge,@selector(closeTaskFromButton:));
