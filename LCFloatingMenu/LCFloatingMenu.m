@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b3"
+#define FM_MENU_VERSION @"1.0.36v31b4"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2088,6 +2088,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)queueAppearanceRefresh;
 - (void)refreshUI;
 - (void)refreshAppsContent;
+- (void)syncCloseBadges;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
@@ -2136,6 +2137,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // 面板常驻：收起后不再拆掉，下一次展开只做形态动画，省掉 400ms 的建面板开销。
     BOOL _panelWarm;
     NSString *_panelWarmSignature;
+    // 空闲释放用的代次：每次收起 +1，展开再 +1，旧的一次性任务自然失效。
+    NSUInteger _panelReleaseToken;
     CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
     CADisplayLink *_morphLink;
@@ -2680,10 +2683,19 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 // 面板内容签名：布局/尺寸/主题/每个 App 的隐藏与运行状态，任一变化都必须重建。
 - (NSString *)panelSignature {
     NSMutableString *signature=[NSMutableString string];
-    CGSize screen=self.window?self.window.bounds.size:CGSizeZero;
-    [signature appendFormat:@"m=%ld dark=%d glass=%d scale=%.2f screen=%.0fx%.0f",
+    CGRect bounds=self.window?self.window.bounds:CGRectZero;
+    UIEdgeInsets insets=self.window?self.window.safeAreaInsets:UIEdgeInsetsZero;
+    // 面板高度按 safeTop / safeBottom 算（buildPanel 4061 行），键盘或宿主窗口
+    // 变化会改这两个值，不写进签名就会复用旧高度、底部被切。
+    CGFloat safeTop=MAX(38,insets.top+6);
+    CGFloat safeBottom=MAX(26,insets.bottom+10);
+    if(FMHostUI()) safeBottom=MAX(safeBottom,100);
+    // 微珠的边与纵向位置决定抽屉从哪儿展开（prepareDrawerMorph 用它算位移），
+    // 复用面板时若位置变了，抽屉会从旧的一侧冒出来，甚至跑到屏幕外。
+    [signature appendFormat:@"m=%ld dark=%d glass=%d scale=%.2f screen=%.0fx%.0f left=%d orbY=%.3f safe=%.0f/%.0f",
         (long)FMMenuLayout(),FMMenuDark()?1:0,FMClearGlassEnabled()?1:0,
-        self.panelContentScale,screen.width,screen.height];
+        self.panelContentScale,bounds.size.width,bounds.size.height,
+        self.left?1:0,self.orbY,safeTop,safeBottom];
     for(NSDictionary *app in self.apps) {
         [signature appendFormat:@"|%@:%d%d",app[@"identity"],
             [app[@"hidden"] boolValue]?1:0,[LCOrbitMultitask isRunningGuest:app]?1:0];
@@ -2695,10 +2707,16 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)prewarmIcons {
     NSArray<NSDictionary *> *apps=self.apps;
     if(!apps.count) return;
+    // 分批预热：一口气读完所有图标会和主线程抢文件 IO，App 多时表现为展开卡顿。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
-        for(NSDictionary *app in apps) {
-            UIImage *image=FMGuestIcon(app);
-            (void)image;
+        NSUInteger batch=8;
+        for(NSUInteger start=0;start<apps.count;start+=batch) {
+            NSUInteger end=MIN(apps.count,start+batch);
+            for(NSUInteger index=start;index<end;index++) {
+                UIImage *image=FMGuestIcon(apps[index]);
+                (void)image;
+            }
+            if(end<apps.count) [NSThread sleepForTimeInterval:.05];
         }
     });
 }
@@ -3029,6 +3047,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     BOOL opening=!self.isOpen;
     CFTimeInterval t0=0,t1=0,t2=0;
     if(opening) {
+        _panelReleaseToken++;   // 取消上一次收起安排的释放
         t0=CACurrentMediaTime();
         [self cancelOrbFade];
         [self loadAppsScroll];
@@ -3063,11 +3082,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [self draw];
             buildMs=(CACurrentMediaTime()-t2)*1000;
         }
-        // 展开耗时打点：scan=清单 log=状态 build=建面板 total=整体 reuse=是否复用
-        FMLogDeferred(@"open-timing",[NSString stringWithFormat:
-            @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d",
-            t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,buildMs,
-            t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0]);
+        // 展开耗时打点：默认关闭，否则日志会被它刷满（诊断里可开）。
+        if(BoolPref(@"perfTiming",NO)) {
+            FMLogDeferred(@"open-timing",[NSString stringWithFormat:
+                @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d",
+                t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,buildMs,
+                t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0]);
+        }
         [self prewarmIcons];
         if(self.panel && self.orb) [self morphDrawerOpen:YES];
     } else if(self.panel && self.orb) {
@@ -3337,6 +3358,18 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             self.panel.center=_morphRestCenter;
         }
         _panelWarm=self.panel!=nil;
+        // 空闲 5 分钟后释放常驻面板：否则一整棵视图树（含全部图标）会一直挂着。
+        NSUInteger token=++_panelReleaseToken;
+        __weak typeof(self) weakSelf=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(300*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            __strong typeof(weakSelf) strongSelf=weakSelf;
+            if(!strongSelf || strongSelf->_panelReleaseToken!=token) return;
+            if(strongSelf.isOpen || !strongSelf->_panelWarm || !strongSelf.panel) return;
+            [strongSelf removePanel];
+            strongSelf->_panelWarm=NO;
+            strongSelf->_panelWarmSignature=nil;
+            FMLogDeferred(@"panel-release",@"idle-5min");
+        });
         self.panel.hidden=YES;
         self.panel.userInteractionEnabled=NO;
         if(self.dismissLayer) {
@@ -4019,6 +4052,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                            closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
     [close setImage:FMCloseBadgeImage(20) forState:UIControlStateNormal];
+    close.tag=9240;   // 关闭角标，运行状态变化时就地同步可见性
     close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
     objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
@@ -4415,6 +4449,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                     close.translatesAutoresizingMaskIntoConstraints=NO;
                     [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
+                    close.tag=9240;
                     close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
                     objc_setAssociatedObject(close,@selector(closeTaskFromButton:),
                                              app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -4507,6 +4542,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
                 [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
+                close.tag=9240;
                 close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
                 objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
@@ -4910,6 +4946,44 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // 内容已就地重建，签名跟着更新，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
 }
+// 运行状态变化只影响关闭角标：就地显示/隐藏，不重建整页。
+// 整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
+// 只有"新任务启动 / 已关闭的任务重新跑起来，必须新建视图"时才退回整页重建。
+- (void)syncCloseBadges {
+    if(!self.appsScroll) return;
+    NSMutableArray<UIView *> *nodes=[NSMutableArray array];
+    NSMutableDictionary<NSString *,UIView *> *badges=[NSMutableDictionary dictionary];
+    NSMutableArray<UIView *> *pending=[NSMutableArray arrayWithArray:self.appsScroll.subviews];
+    while(pending.count) {
+        UIView *view=pending.lastObject;
+        [pending removeLastObject];
+        [nodes addObject:view];
+        if(view.tag==9240) {
+            NSDictionary *app=objc_getAssociatedObject(view,@selector(closeTaskFromButton:));
+            if(app) badges[FMAppKey(app)]=view;
+        }
+        [pending addObjectsFromArray:view.subviews];
+    }
+    BOOL missing=NO;
+    for(UIView *view in nodes) {
+        if(view.tag==9240) continue;
+        NSDictionary *app=objc_getAssociatedObject(view,@selector(switchFromRow:));
+        if(!app || ![LCOrbitMultitask isRunningGuest:app]) continue;
+        UIView *badge=badges[FMAppKey(app)];
+        // 角标不存在，或者刚被关掉还藏着，但任务又在运行：只能重建才能补出新角标。
+        if(!badge || badge.hidden) { missing=YES; break; }
+    }
+    if(missing) { [self refreshAppsContent]; return; }
+    // 只隐藏、不主动显示：关闭是异步的，LC 的 isAppRunning 可能还短暂为真，
+    // 若这里反向恢复就会让角标"闪回来"。恢复显示统一交给重建。
+    for(NSString *key in badges) {
+        UIView *badge=badges[key];
+        NSDictionary *app=objc_getAssociatedObject(badge,@selector(closeTaskFromButton:));
+        if(app && ![LCOrbitMultitask isRunningGuest:app]) badge.hidden=YES;
+    }
+    // 界面已与数据对齐，签名同步，收起后仍可复用。
+    _panelWarmSignature=[self panelSignature];
+}
 - (void)requestAppsRefresh {
     // didActivateWindow and forgetWindow may notify during one close. Merge
     // their updates into a single frame, preserving the native glass shell.
@@ -4918,7 +4992,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.appsRefreshScheduled=NO;
         if(self.isOpen && self.panel && self.appsScroll &&
-           [LCOrbitMultitask shouldShowFloatingMenu]) [self refreshAppsContent];
+           [LCOrbitMultitask shouldShowFloatingMenu]) [self syncCloseBadges];
         else if(![LCOrbitMultitask shouldShowFloatingMenu]) [self draw];
     });
 }
@@ -5145,6 +5219,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UILabel *hint=[self label:@"两类日志分别查看、刷新、导出和清空。Tweak 日志为已加载状态审计，无法回溯插件启动前的系统 NSLog。" size:12 weight:UIFontWeightRegular];
         hint.textColor=FMThemeColor(FMColorSecondary);
         [s addArrangedSubview:hint];
+        [self spacer:s size:14];
+        [self section:@"性能诊断" sub:@"开启后每次展开记录 scan / log / build 分段耗时；日志量会增加，排查完建议关闭。" in:s];
+        [self settingSwitch:s title:@"记录展开耗时" key:@"perfTiming" defaultValue:NO tag:31];
     }
 }
 - (void)observeAppearanceInScene:(UIWindowScene *)scene {
@@ -6176,6 +6253,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 23:key=@"keepScreenAwake";break;
         case 24:key=@"lockBanRightLandscape";break;
         case 30:key=@"beadHideLandscape";break;
+        case 31:key=@"perfTiming";break;
         case 25:key=@"autoCheckUpdate";break;
         case 26:key=@"autoLaunchLastApp";break;
         case 4:key=AppPref();break;
@@ -6583,7 +6661,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         [self showMessage:@"关闭任务失败" details:error.localizedDescription?:@"请稍后重试。"];
         return;
     }
-    sender.enabled=NO;
+    // 角标直接消失：不做 enabled 灰化，也不整页重建，避免点击后那一下过渡。
+    sender.hidden=YES;
     FMLog(@"task-close-requested",FMAppKey(target));
     if(collapse) { self.isOpen=NO;[self draw]; }
 }
