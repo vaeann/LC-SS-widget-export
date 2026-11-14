@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b8"
+#define FM_MENU_VERSION @"1.0.36v31b9"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3315,7 +3315,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     _popRevealed=!open;_popStarted=!open;
     [self.overlayView bringSubviewToFront:self.orb];
     [self applyMorphProgress:open?0:1];
-    [self settleDrawerMorphOpen:open velocity:0];
+    // 点击展开给一个初速，第一帧就有位移；收起仍从静止开始，避免"甩回去"。
+    [self settleDrawerMorphOpen:open velocity:open?1.5:0];
 }
 // Hands the progress to the spring. velocity is in progress per second.
 - (void)settleDrawerMorphOpen:(BOOL)open velocity:(CGFloat)velocity {
@@ -3330,9 +3331,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         [self finishDrawerMorph];
         return;
     }
-    // Opening is the dock's springy one (response .46 s, damping .68); closing is
+    // Opening is the dock's springy one (response .34 s, damping .68); closing is
     // firmer (.40 s, .82) so it does not hang around after the bead is back.
-    _morphOmega=2*M_PI/(open?.46:.40);
+    // 原来是 .46：无初速时前 60ms 只走 10% 位移，读起来像"点了没反应"。
+    // 阻尼保持 .68（欠阻尼、轻微回弹），只缩短响应并给初速。
+    _morphOmega=2*M_PI/(open?.34:.40);
     _morphZeta=open?.68:.82;
     _morphTick=0;
     _morphElapsed=0;
