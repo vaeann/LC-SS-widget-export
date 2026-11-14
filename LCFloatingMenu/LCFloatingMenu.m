@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b6"
+#define FM_MENU_VERSION @"1.0.36v31b8"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2160,6 +2160,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CGPoint _scrubStartPoint;
     UILongPressGestureRecognizer *_scrubGesture;
     UISelectionFeedbackGenerator *_scrubTick;
+    // 滚动颗粒感：每滚过一段距离给一次极轻的"嗒"，类似表冠的档位。
+    UISelectionFeedbackGenerator *_scrollTick;
+    CGFloat _scrollTickOffset;
+    CFTimeInterval _scrollTickTime;
     BOOL _hiddenAppsExpanded;
 }
 + (instancetype)shared {
@@ -2449,6 +2453,36 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(scrollView!=self.appsScroll || self.appsScrollRestorePending) return;
     CGFloat y=scrollView.contentOffset.y;
     if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
+    [self tickScrollHapticForOffset:y];
+}
+// 拖动开始的那一刻对齐基准，否则恢复过的滚动位置会在第一次滑动时立刻多震一下。
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+    if(scrollView==self.appsScroll) _scrollTickOffset=scrollView.contentOffset.y;
+}
+// 表冠式颗粒：按"位移档位"触发，而不是按帧。
+//   · 档位 32pt（约半行到一行），慢滑时一格一响，快滑时自动合并成一串
+//   · 最短间隔 45ms，约 22 次/秒，再密就会糊成一片、也更费电
+//   · 内容不足一屏、橡皮筋回弹、放大镜扫选、抽屉开合动画期间都不触发
+- (void)tickScrollHapticForOffset:(CGFloat)y {
+    if(!BoolPref(@"scrollHaptic",NO) || !BoolPref(@"haptic",YES)) return;
+    if(_scrubActive || _morphActive) return;
+    UIScrollView *scroll=self.appsScroll;
+    if(!scroll) return;
+    CGFloat viewport=scroll.bounds.size.height;
+    CGFloat travel=scroll.contentSize.height-viewport+scroll.adjustedContentInset.bottom;
+    if(viewport<40 || travel<8) return;
+    if(y< -1 || y>travel+1) return;
+    if(fabs(y-_scrollTickOffset)<32) return;
+    CFTimeInterval now=CACurrentMediaTime();
+    if(now-_scrollTickTime<.045) return;
+    if(!_scrollTick) {
+        _scrollTick=[UISelectionFeedbackGenerator new];
+        [_scrollTick prepare];   // 首次触发不用等引擎唤醒
+    }
+    _scrollTickOffset=y;
+    _scrollTickTime=now;
+    [_scrollTick selectionChanged];
+    [_scrollTick prepare];
 }
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
     if(scrollView==self.appsScroll && !decelerate) [self persistAppsScroll];
@@ -3076,8 +3110,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                    [signature isEqualToString:_panelWarmSignature?:@""];
         CFTimeInterval buildMs=0;
         if(reuse) {
-            // 面板还藏着，先把运行标记对齐（切换任务后绿点要换位置）；此时重建不可见。
-            [self syncCloseBadges];
+            // 这里不做全量同步：真实的状态变化一定会先经过配置通知（面板开着就
+            // requestAppsRefresh，关着就 refreshUI→draw 重建），而这段同步要遍历整棵
+            // 面板树并反复查 LC 的运行状态，实测会把展开从 60ms 拖到 160ms。
             self.panel.hidden=NO;
             self.panel.userInteractionEnabled=NO;
             if(self.dismissLayer) self.dismissLayer.hidden=NO;
@@ -4958,9 +4993,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)syncCloseBadges {
     UIView *root=self.panel ?: self.appsScroll;
     if(!root) return;
+    // 先把运行状态一次性算成集合：下面要按节点、按角标多次判断，
+    // 每次现查 isRunningGuest 会遍历 LC 的任务窗口，整轮下来很贵。
+    NSMutableSet<NSString *> *runningKeys=[NSMutableSet set];
     NSString *currentKey=nil;
     for(NSDictionary *app in self.apps) {
-        if([LCOrbitGuestService isCurrentGuest:app]) { currentKey=FMAppKey(app); break; }
+        NSString *key=FMAppKey(app);
+        if([LCOrbitMultitask isRunningGuest:app]) [runningKeys addObject:key];
+        if(!currentKey && [LCOrbitGuestService isCurrentGuest:app]) currentKey=key;
     }
     NSMutableArray<UIView *> *nodes=[NSMutableArray array];
     NSMutableArray<UIView *> *lights=[NSMutableArray array];
@@ -5009,15 +5049,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     for(UIView *view in nodes) {
         if(view.tag==9240) continue;
         NSDictionary *app=objc_getAssociatedObject(view,@selector(switchFromRow:));
-        if(!app || ![LCOrbitMultitask isRunningGuest:app]) continue;
+        if(!app || ![runningKeys containsObject:FMAppKey(app)]) continue;
         if(!badges[FMAppKey(app)]) { missing=YES; break; }
     }
     if(missing) { [self refreshAppsContent]; return; }
     // 只隐藏、不主动显示：恢复显示交给重建，避免关闭动画期间把角标"闪回来"。
     for(NSString *key in badges) {
-        UIView *badge=badges[key];
-        NSDictionary *app=objc_getAssociatedObject(badge,@selector(closeTaskFromButton:));
-        if(app && ![LCOrbitMultitask isRunningGuest:app]) badge.hidden=YES;
+        if([runningKeys containsObject:key]) continue;
+        badges[key].hidden=YES;
     }
     // 界面已与数据对齐，签名同步，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
@@ -5235,6 +5274,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+        [self settingSwitch:s title:@"滚动颗粒感" key:@"scrollHaptic" defaultValue:NO tag:32];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
@@ -6292,6 +6332,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 24:key=@"lockBanRightLandscape";break;
         case 30:key=@"beadHideLandscape";break;
         case 31:key=@"perfTiming";break;
+        case 32:key=@"scrollHaptic";break;
         case 25:key=@"autoCheckUpdate";break;
         case 26:key=@"autoLaunchLastApp";break;
         case 4:key=AppPref();break;
