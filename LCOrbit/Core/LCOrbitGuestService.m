@@ -66,6 +66,8 @@ static NSArray<NSDictionary *> *FMInventoryCache;
 static NSString *FMInventorySignature;
 static BOOL FMInventoryCacheValid;
 
+// 签名必须包含每个 App 两个 plist 的 mtime 与大小：只比目录 mtime 会漏掉
+// 「锁定/隐藏」这类只改文件内容、不动目录的变更（单元测试正是这么验证的）。
 static NSString *FMInventorySignatureFor(NSArray<NSDictionary *> *roots,BOOL hostMultitask) {
     NSMutableString *signature=[NSMutableString stringWithFormat:@"host=%d",hostMultitask?1:0];
     NSFileManager *fm=NSFileManager.defaultManager;
@@ -73,7 +75,20 @@ static NSString *FMInventorySignatureFor(NSArray<NSDictionary *> *roots,BOOL hos
         NSString *path=info[@"path"];
         NSDictionary *attributes=[fm attributesOfItemAtPath:path error:nil];
         NSDate *modified=attributes[NSFileModificationDate];
-        [signature appendFormat:@"|%@|%.0f",path,modified?modified.timeIntervalSince1970:0];
+        [signature appendFormat:@"|%@|%.6f",path,modified?modified.timeIntervalSince1970:0];
+        NSArray *entries=[fm contentsOfDirectoryAtPath:path error:nil];
+        for(NSString *entry in [entries sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
+            if(![entry hasSuffix:@".app"]) continue;
+            NSString *folder=[path stringByAppendingPathComponent:entry];
+            for(NSString *name in @[@"LCAppInfo.plist",@"Info.plist"]) {
+                NSDictionary *fileAttributes=[fm attributesOfItemAtPath:
+                    [folder stringByAppendingPathComponent:name] error:nil];
+                NSDate *fileDate=fileAttributes[NSFileModificationDate];
+                [signature appendFormat:@"|%@:%.6f:%llu",entry,
+                    fileDate?fileDate.timeIntervalSince1970:0,
+                    (unsigned long long)[fileAttributes[NSFileSize] unsignedLongLongValue]];
+            }
+        }
     }
     return signature;
 }
