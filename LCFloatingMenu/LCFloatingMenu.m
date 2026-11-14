@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b2"
+#define FM_MENU_VERSION @"1.0.36v31b3"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3330,6 +3330,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             return;
         }
         // 面板留在原地（已收缩到 progress 0），隐藏但不销毁：下次展开只跑动画。
+        // progress 0 把 transform 缩到 0、center 带偏移，必须还原成静止几何，
+        // 否则下次 prepareDrawerMorph 读到 scale<=0 会直接失败，退回重建。
+        if(self.panel) {
+            self.panel.transform=CGAffineTransformMakeScale(_morphScale,_morphScale);
+            self.panel.center=_morphRestCenter;
+        }
         _panelWarm=self.panel!=nil;
         self.panel.hidden=YES;
         self.panel.userInteractionEnabled=NO;
