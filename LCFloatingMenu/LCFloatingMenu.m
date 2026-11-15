@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b19"
+#define FM_MENU_VERSION @"1.0.36v31b20"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2137,6 +2137,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // 面板常驻：收起后不再拆掉，下一次展开只做形态动画，省掉 400ms 的建面板开销。
     BOOL _panelWarm;
     NSString *_panelWarmSignature;
+    NSString *_panelWarmStructure;
     // 空闲释放用的代次：每次收起 +1，展开再 +1，旧的一次性任务自然失效。
     NSUInteger _panelReleaseToken;
     CGFloat _morphScale,_morphOmega,_morphZeta;
@@ -2715,7 +2716,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self openSettings];
 }
 // 面板内容签名：布局/尺寸/主题/每个 App 的隐藏与运行状态，任一变化都必须重建。
-- (NSString *)panelSignature {
+- (NSString *)panelSignature { return [self panelSignatureIncludingRunning:YES]; }
+// 结构签名不带"某 App 是否在跑"：启停一个任务只影响角标/呼吸灯，不该触发整页重建。
+- (NSString *)panelSignatureIncludingRunning:(BOOL)includeRunning {
     NSMutableString *signature=[NSMutableString string];
     CGRect bounds=self.window?self.window.bounds:CGRectZero;
     UIEdgeInsets insets=self.window?self.window.safeAreaInsets:UIEdgeInsetsZero;
@@ -2734,7 +2737,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // syncCloseBadges），记进签名会让每次切换都强制重建 400ms。
     for(NSDictionary *app in self.apps) {
         [signature appendFormat:@"|%@:%d%d",app[@"identity"],
-            [app[@"hidden"] boolValue]?1:0,[LCOrbitMultitask isRunningGuest:app]?1:0];
+            [app[@"hidden"] boolValue]?1:0,
+            includeRunning?([LCOrbitMultitask isRunningGuest:app]?1:0):0];
     }
     return signature;
 }
@@ -2782,6 +2786,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         [self buildPanel];
         // 记下这块面板对应的数据签名：之后只要数据没变就能直接复用。
         _panelWarmSignature=[self panelSignature];
+        _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
         _panelWarm=self.panel!=nil;
         // A transient scene with no panel space must keep a usable edge tab.
         if(!self.panel) {
@@ -3106,10 +3111,17 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(opening) {
         // 面板常驻：内容没变就直接复用，build 记为 0。
         NSString *signature=[self panelSignature];
-        BOOL reuse=self.panel && self.orb && _panelWarm &&
-                   [signature isEqualToString:_panelWarmSignature?:@""];
+        NSString *structure=[self panelSignatureIncludingRunning:NO];
+        NSString *previous=[_panelWarmSignature copy];
+        BOOL sameStructure=self.panel && self.orb && _panelWarm && _panelWarmStructure &&
+                   [structure isEqualToString:_panelWarmStructure];
+        BOOL reuse=sameStructure && [signature isEqualToString:_panelWarmSignature?:@""];
+        // 只有运行状态变了：面板内容一字未动，直接复用；角标由 requestAppsRefresh 那条链路同步。
+        BOOL structureOnly=sameStructure && !reuse;
+        // 只有运行状态变了：面板内容一字未动，签名跟上就算已完成复用。
+        if(structureOnly) _panelWarmSignature=signature;
         CFTimeInterval buildMs=0;
-        if(reuse) {
+        if(reuse||structureOnly) {
             // 这里不做全量同步：真实的状态变化一定会先经过配置通知（面板开着就
             // requestAppsRefresh，关着就 refreshUI→draw 重建），而这段同步要遍历整棵
             // 面板树并反复查 LC 的运行状态，实测会把展开从 60ms 拖到 160ms。
@@ -3123,10 +3135,15 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         }
         // 展开耗时打点：默认关闭，否则日志会被它刷满（诊断里可开）。
         if(BoolPref(@"perfTiming",NO)) {
+            NSString *why=@"";
+            if(!reuse && !structureOnly)
+                why=[NSString stringWithFormat:@" prev=[%@] now=[%@]",
+                     previous.length>220?[previous substringToIndex:220]:previous?:@"",
+                     signature.length>220?[signature substringToIndex:220]:signature];
             FMLogDeferred(@"open-timing",[NSString stringWithFormat:
-                @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d",
+                @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d structure=%d%@",
                 t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,buildMs,
-                t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0]);
+                t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0,structureOnly?1:0,why]);
         }
         [self prewarmIcons];
         if(self.panel && self.orb) [self morphDrawerOpen:YES];
@@ -3411,6 +3428,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [strongSelf removePanel];
             strongSelf->_panelWarm=NO;
             strongSelf->_panelWarmSignature=nil;
+            strongSelf->_panelWarmStructure=nil;
             FMLogDeferred(@"panel-release",@"idle-10min");
         });
         self.panel.hidden=YES;
@@ -4992,6 +5010,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     self.appsScrollRestorePending=NO;
     // 内容已就地重建，签名跟着更新，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
+    _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
 }
 // 运行状态变化只影响两类标记：关闭角标与当前 App 的呼吸灯。
 // 就地增删/显隐，不重建整页——整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
@@ -5066,6 +5085,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     // 界面已与数据对齐，签名同步，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
+    _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
 }
 - (void)requestAppsRefresh {
     // didActivateWindow and forgetWindow may notify during one close. Merge
