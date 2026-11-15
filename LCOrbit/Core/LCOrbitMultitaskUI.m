@@ -715,8 +715,10 @@ static void UpdateHostStatusBarVisibility(void) {
     BOOL hide=[LCOrbitMultitask isEnabled] && active && !OrbitPiPProtectedWindow(active) &&
         PhysicalTopAvoidanceEnabled(bundle);
     if(hide==FMHostStatusBarHidden) return;
-    FMHostStatusBarHidden=hide;
     NSString *setter=SetOverrideStatusBarHidden(hide);
+    // 没拿到 statusBarManager 时不记状态，下一次布局继续尝试（否则会永远停在"以为已生效"）。
+    if(!setter) return;
+    FMHostStatusBarHidden=hide;
     for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
         for(UIWindow *window in ((UIWindowScene *)scene).windows)
