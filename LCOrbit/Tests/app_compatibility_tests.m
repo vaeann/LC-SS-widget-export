@@ -63,6 +63,17 @@ int main(void) {
         NSUInteger count=Preferences.count;
         [LCOrbitMultitask setUsesAppTopInset:YES forBundle:@""];
         EXPECT(Preferences.count==count,"empty identifier writes nothing");
+        // 跨形态：设置页只拿得到安装目录名（带 .app），运行时只拿得到场景 bundleId（不带 .app）
+        [LCOrbitMultitask setUsesAppTopInset:YES forBundle:@"com.example.icon.app"];
+        EXPECT([LCOrbitMultitask usesAppTopInsetForBundle:@"com.example.icon"],"install-folder key resolves from scene bundleId");
+        EXPECT([LCOrbitMultitask usesAppTopInsetForBundle:@"private/com.example.icon.app"],"scoped identity resolves to the same key");
+        [LCOrbitMultitask setUsesAppTopInset:NO forBundle:@"com.example.icon.app"];
+        EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"com.example.icon"],"turning off clears the scene bundleId form");
+        // 反向：写 bundleId 形态，读目录名形态
+        [LCOrbitMultitask setUsesAppTopInset:YES forBundle:@"com.example.other"];
+        EXPECT([LCOrbitMultitask usesAppTopInsetForBundle:@"com.example.other.app"],"scene bundleId key resolves from install folder");
+        EXPECT([LCOrbitMultitask usesAppTopInsetForBundle:@"shared/com.example.other.app"],"shared identity resolves from the same key");
+        [LCOrbitMultitask setUsesAppTopInset:NO forBundle:@"com.example.other"];
         UIViewController *a=[UIViewController new],*b=[UIViewController new];a.bundleId=@"A.app";b.bundleId=@"B.app";
         objc_setAssociatedObject(a,&GeometryLogKey,@5,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(b,&GeometryLogKey,@5,OBJC_ASSOCIATION_RETAIN_NONATOMIC);

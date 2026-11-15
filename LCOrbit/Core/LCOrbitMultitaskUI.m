@@ -187,11 +187,40 @@ static BOOL OrbitValidFrame(CGRect frame) {
 }
 // Legacy storage key and UI API retain the raw switch value. Product policy:
 // ON = default physical avoidance (v5); OFF = Guest-owned top safe area (v6).
+// 同一个 App 在四处出现，写法各不相同：
+//   设置页 app[@"path"]   com.xxx.app（安装目录名，带 .app 后缀）
+//   场景 scene.bundleId   com.xxx（日志 guestBundle 实锤，不带 .app）
+//   identity              private/com.xxx.app 或 shared/com.xxx.app
+// 写入端只拿得到目录名，运行时只拿得到场景 bundleId，两边的键必须由同一个
+// 函数生成才可能对上；只处理「去第一段前缀」是不够的（目录名里没有斜杠）。
+static NSArray<NSString *> *FMInsetKeyVariants(NSString *bundle) {
+    if(!bundle.length) return @[];
+    NSMutableSet<NSString *> *tokens=[NSMutableSet setWithObject:bundle];
+    for(NSString *prefix in @[@"private/",@"shared/",@"Applications/",@"LiveContainer/Applications/"])
+        if([bundle hasPrefix:prefix]) [tokens addObject:[bundle substringFromIndex:prefix.length]];
+    NSRange slash=[bundle rangeOfString:@"/" options:NSBackwardsSearch];
+    if(slash.location!=NSNotFound) [tokens addObject:[bundle substringFromIndex:slash.location+1]];
+    // 目录名带 .app、场景 bundleId 不带：两种都补全，任何一侧都能命中另一侧。
+    for(NSString *token in tokens.allObjects) {
+        if([token.pathExtension.lowercaseString isEqualToString:@"app"])
+            [tokens addObject:[token stringByDeletingPathExtension]];
+        else
+            [tokens addObject:[token stringByAppendingString:@".app"]];
+    }
+    NSMutableArray<NSString *> *keys=[NSMutableArray arrayWithCapacity:tokens.count];
+    for(NSString *token in tokens)
+        if(token.length) [keys addObject:[@"guestOwnTopInset." stringByAppendingString:token]];
+    return keys;
+}
+static NSString *FMResolvedInsetKey(NSString *bundle) {
+    for(NSString *key in FMInsetKeyVariants(bundle)) {
+        id value=[LCOrbitStorage objectForKey:key module:@"LCFloatingMenu"];
+        if([value isKindOfClass:NSNumber.class] && [value boolValue]) return key;
+    }
+    return nil;
+}
 static BOOL PhysicalTopAvoidanceEnabled(NSString *bundle) {
-    if(!bundle.length) return NO;
-    id value=[LCOrbitStorage objectForKey:[@"guestOwnTopInset." stringByAppendingString:bundle]
-                                 module:@"LCFloatingMenu"];
-    return [value isKindOfClass:NSNumber.class] && [value boolValue];
+    return FMResolvedInsetKey(bundle)!=nil;
 }
 static BOOL GuestOwnsTopInset(NSString *bundle) {
     return !PhysicalTopAvoidanceEnabled(bundle);
@@ -268,7 +297,10 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
        safe.top<0 || safe.left<0 || safe.bottom<0 || safe.right<0 ||
        safe.top+safe.bottom>bounds.size.height || safe.left+safe.right>bounds.size.width) return NO;
     BOOL ready=InitialSceneWindow!=window && [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue];
-    CGRect viewport=GuestViewport(bounds,safe,ready && !GuestOwnsTopInset([(id)SceneController(window) bundleId]));
+    // 兼容开关（PhysicalTopAvoidanceEnabled）的语义是"与单任务一致的全屏"：
+    // 视口不再下移/缩矮，顶部遮挡改由 ApplyGeometry 里的"禁用状态栏"解决。
+    BOOL guestOwns=PhysicalTopAvoidanceEnabled([(id)SceneController(window) bundleId]) || GuestOwnsTopInset([(id)SceneController(window) bundleId]);
+    CGRect viewport=GuestViewport(bounds,safe,ready && !guestOwns);
     if(!OrbitValidFrame(viewport)) return NO;
     *frame=(CGRect){CGPointZero,viewport.size};
     if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(viewport.size.height,viewport.size.width);
@@ -300,6 +332,8 @@ static void RecordGeometry(NSString *stage,UIViewController *window,id settings)
         @"geometryPolicy":@"per-app-viewport-v6",
         @"viewportReady":@([objc_getAssociatedObject(window,&ViewportReadyKey) boolValue]),
         @"appOwnsTopInset":@(GuestOwnsTopInset([(id)scene bundleId])),
+        @"insetKeyMatched":FMResolvedInsetKey([(id)scene bundleId])?:@"none",
+        @"insetKeysTried":[FMInsetKeyVariants([(id)scene bundleId]) componentsJoinedByString:@","],
         @"decoratedFrame":NSStringFromCGRect(window.view.frame),
         @"sceneViewFrame":NSStringFromCGRect(scene.view.frame),
         @"guestBundle":[(id)scene bundleId]?:@"unknown",
@@ -355,6 +389,18 @@ static void ApplyGeometry(UIViewController *window,id settings,CGRect frame,UIIn
     }
     // Decorated LC windows disable the Guest status bar. Fullscreen Guests
     // need normal status-bar layout as well as safe-area insets and host metrics.
+    // 兼容开关打开的 App 同样走"禁用状态栏"：与单任务一致的全屏，避免
+    // 窗口下移与状态栏避让帧叠加把底部内容推出屏幕。
+    if(PhysicalTopAvoidanceEnabled([(id)SceneController(window) bundleId])) {
+        if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:YES];
+        if([settings respondsToSelector:@selector(setStatusBarHeight:)]) [settings setStatusBarHeight:0];
+        if([settings respondsToSelector:@selector(setStatusBarAvoidanceFrame:)]) [settings setStatusBarAvoidanceFrame:CGRectZero];
+        [settings setFrame:frame];
+        [settings setPeripheryInsets:insets];
+        [settings setSafeAreaInsetsPortrait:PortraitInsets(insets,orientation)];
+        if([settings respondsToSelector:@selector(setSafeAreaEdgeInsets:)]) [settings setSafeAreaEdgeInsets:insets];
+        return;
+    }
     if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:NO];
     UIWindow *host=window.view.window ?: window.parentViewController.view.window;
     UIStatusBarManager *manager=host.windowScene.statusBarManager;
@@ -399,8 +445,9 @@ static void LayoutFullscreen(UIViewController *window) {
     UIView *mounted=[(id)scene contentView];
     if(mounted.window==host && host && InitialSceneWindow!=window)
         objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    BOOL guestOwns=PhysicalTopAvoidanceEnabled([(id)scene bundleId]) || GuestOwnsTopInset([(id)scene bundleId]);
     CGRect viewport=GuestViewport(host.bounds,host.safeAreaInsets,
-        [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue] && !GuestOwnsTopInset([(id)scene bundleId]));
+        [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue] && !guestOwns);
     if(!OrbitValidFrame(viewport)) return;
     if(view.superview) {
         CGRect physical=[view.superview convertRect:viewport fromView:host];
@@ -799,11 +846,14 @@ static void PiPStopped(id manager,SEL selector,id controller) {
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return PhysicalTopAvoidanceEnabled(bundle); }
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle {
     if(!bundle.length) return;
-    [LCOrbitStorage setObject:@(enabled) forKey:[@"guestOwnTopInset." stringByAppendingString:bundle] module:@"LCFloatingMenu"];
+    NSArray<NSString *> *writtenKeys=FMInsetKeyVariants(bundle);
+    for(NSString *key in writtenKeys)
+        [LCOrbitStorage setObject:@(enabled) forKey:key module:@"LCFloatingMenu"];
+    // 场景 bundleId 与设置页目录名不是同一写法，按键集合求交集才算同一个 App。
     for(UIViewController *window in [self windows])
-        if([[(id)SceneController(window) bundleId] isEqual:bundle])
+        if([FMInsetKeyVariants([(id)SceneController(window) bundleId]?:@"") firstObjectCommonWithArray:writtenKeys])
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"physicalTopAvoidanceEnabled":@(enabled),@"appOwnsTopInset":@(GuestOwnsTopInset(bundle))} kind:@"runtime"];
+    [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"physicalTopAvoidanceEnabled":@(enabled),@"appOwnsTopInset":@(GuestOwnsTopInset(bundle)),@"storedKeys":writtenKeys} kind:@"runtime"];
     [self refreshPresentation];
 }
 + (BOOL)installHooksWithError:(NSError **)error {

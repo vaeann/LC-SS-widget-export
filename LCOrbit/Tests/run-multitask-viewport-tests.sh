@@ -13,6 +13,8 @@ native=(root/'MultitaskSupport/UIKitHooks.m').read_text()
 parts=[]
 for text,signature in [
     (source,'static BOOL OrbitValidFrame('),
+    (source,'static NSArray<NSString *> *FMInsetKeyVariants('),
+    (source,'static NSString *FMResolvedInsetKey('),
     (source,'static BOOL PhysicalTopAvoidanceEnabled('),
     (source,'static BOOL GuestOwnsTopInset('),
     (source,'static CGRect GuestViewport('),
