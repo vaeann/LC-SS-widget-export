@@ -2140,6 +2140,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     BOOL _panelWarm;
     NSString *_panelWarmSignature;
     NSString *_panelWarmStructure;
+    // 应用清单的最近一次扫描时刻：展开太频繁时不必每次都重新校验（服务层校验要 stat 40 个文件）。
+    CFTimeInterval _appsScanAt;
     // 空闲释放用的代次：每次收起 +1，展开再 +1，旧的一次性任务自然失效。
     NSUInteger _panelReleaseToken;
     CGFloat _morphScale,_morphOmega,_morphZeta;
@@ -3138,7 +3140,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
     self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) {
-        self.apps=InstalledApps();
+        // 1 秒内复用上次清单：清单校验要给每个 App 的两个 plist 做 stat（实测 7~31ms）。
+        // 安装/隐藏 App 会走服务层 invalidate，最迟 1 秒后的下一次展开即刷新。
+        CFTimeInterval now=CACurrentMediaTime();
+        if(!self.apps.count || now-_appsScanAt>1.0) {
+            self.apps=InstalledApps();
+            _appsScanAt=now;
+        }
         t1=CACurrentMediaTime();
         [self rememberCurrentApp];
     }
