@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b10"
+#define FM_MENU_VERSION @"1.0.36v31b11"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -6235,7 +6235,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 
 - (void)compatibilityPage:(UIStackView *)stack {
-    [self section:@"应用兼容性" sub:@"开启后以兼容性方式启动，由 App 自行避让顶部。关闭时保持默认行为。部分 App 需重新启动后生效。" in:stack];
+    [self section:@"应用兼容性" sub:@"开启后隐藏状态栏并全屏显示，与单任务一致；适合顶部按钮被状态栏遮挡的 App。部分 App 需重新启动后生效。" in:stack];
     NSArray<NSDictionary *> *apps=InstalledApps();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
