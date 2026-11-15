@@ -643,7 +643,37 @@ static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
 static BOOL FMHostStatusBarHidden=NO;
 static NSMutableDictionary<NSString *,NSValue *> *FMStatusBarOriginals=nil;
 static NSMutableArray<UIWindow *> *FMHiddenStatusWindows=nil;
+static NSUInteger FMStatusBarQueries=0;
 static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector);
+static void FMSwizzleStatusBarClass(Class cls);
+// 只 swizzle 根 VC 会漏掉真正回答偏好的子控制器（SwiftUI hosting / 容器子 VC），
+// 这里把整棵控制器树都换掉类实现，谁被问都返回同一个答案。
+static void FMSwizzleStatusBarHierarchy(UIViewController *controller) {
+    if(!controller) return;
+    FMSwizzleStatusBarClass(object_getClass(controller));
+    for(UIViewController *child in controller.childViewControllers)
+        FMSwizzleStatusBarHierarchy(child);
+    FMSwizzleStatusBarHierarchy(controller.presentedViewController);
+}
+// 一次性探针：把这几个类里带 statusBar/hidden 的实例方法名打进日志，
+// 下一轮如果还压不住，就不用再猜哪些私有开关可用。
+static NSString *FMStatusBarSelectorProbe(void) {
+    NSMutableArray<NSString *> *names=[NSMutableArray array];
+    for(NSString *className in @[@"UIApplication",@"UIWindowScene",@"UIStatusBarManager"]) {
+        Class cls=NSClassFromString(className);
+        if(!cls) continue;
+        unsigned int count=0;
+        Method *methods=class_copyMethodList(cls,&count);
+        for(unsigned int i=0;i<count;i++) {
+            NSString *name=NSStringFromSelector(method_getName(methods[i]));
+            if([name rangeOfString:@"idden"].location!=NSNotFound ||
+               [name rangeOfString:@"statusBar"].location!=NSNotFound)
+                [names addObject:[className stringByAppendingFormat:@".%@",name]];
+        }
+        free(methods);
+    }
+    return [names componentsJoinedByString:@"|"];
+}
 static void FMSwizzleStatusBarClass(Class cls) {
     if(!cls) return;
     Method method=class_getInstanceMethod(cls,@selector(prefersStatusBarHidden));
@@ -655,6 +685,7 @@ static void FMSwizzleStatusBarClass(Class cls) {
     method_setImplementation(method,(IMP)FMHostPrefersStatusBarHidden);
 }
 static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector) {
+    FMStatusBarQueries++;
     if(FMHostStatusBarHidden) return YES;
     for(Class cls=object_getClass(owner);cls;cls=class_getSuperclass(cls)) {
         NSValue *original=FMStatusBarOriginals[NSStringFromClass(cls)];
@@ -699,7 +730,7 @@ static void UpdateHostStatusBarVisibility(void) {
     for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
         for(UIWindow *window in ((UIWindowScene *)scene).windows)
-            FMSwizzleStatusBarClass(object_getClass(window.rootViewController));
+            FMSwizzleStatusBarHierarchy(window.rootViewController);
     }
     UIViewController *active=[LCOrbitMultitask activeWindow];
     NSString *bundle=[(id)SceneController(active) bundleId];
@@ -738,6 +769,10 @@ static void UpdateHostStatusBarVisibility(void) {
     NSMutableDictionary *details=[@{@"hide":@(hide),@"guestBundle":bundle?:@"none",
         @"privateStatusBarAPI":@(privateAvailable),
         @"statusWindowsHidden":@(FMHiddenStatusWindows.count),
+        @"queries":@(FMStatusBarQueries),
+        @"plistBased":[NSBundle.mainBundle objectForInfoDictionaryKey:@"UIViewControllerBasedStatusBarAppearance"]?:@"unset",
+        @"rootClass":host.rootViewController?NSStringFromClass(object_getClass(host.rootViewController)):@"none",
+        @"selectors":FMStatusBarSelectorProbe(),
         @"hostStatusBarFrame":host?NSStringFromCGRect(host.windowScene.statusBarManager.statusBarFrame):@"none"} mutableCopy];
     if(host && [host.windowScene.statusBarManager respondsToSelector:NSSelectorFromString(@"isStatusBarHidden")])
         details[@"statusBarHidden"]=@([(id)host.windowScene.statusBarManager isStatusBarHidden]);
