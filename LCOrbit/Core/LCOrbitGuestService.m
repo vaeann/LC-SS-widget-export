@@ -65,6 +65,7 @@ static NSString *Status(NSString *reason) {
 static NSArray<NSDictionary *> *FMInventoryCache;
 static NSString *FMInventorySignature;
 static BOOL FMInventoryCacheValid;
+static CFTimeInterval FMInventoryCheckedAt;
 
 // 签名必须包含每个 App 两个 plist 的 mtime 与大小：只比目录 mtime 会漏掉
 // 「锁定/隐藏」这类只改文件内容、不动目录的变更（单元测试正是这么验证的）。
@@ -105,7 +106,16 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
     NSString *group=String([LCOrbitHost appGroupPath]);
     if(group.length) [roots addObject:@{@"path":[group stringByAppendingPathComponent:@"LiveContainer/Applications"],@"shared":@YES}];
     else [diagnostics addObject:@"inventory-error scope=shared reason=missing-app-group"];
+    // 校验签名要给每个 App 的 LCAppInfo/Info.plist 做 stat，20 个 App 就是 40 次 IO
+    // （实测 7~31ms）。展开这么频繁的动作不需要每秒重新确认：1 秒内直接吃缓存，
+    // 真发生变化（安装/隐藏）走 invalidateInstalledAppsCache 立即失效。
+    CFTimeInterval now=CFAbsoluteTimeGetCurrent();
+    if(FMInventoryCacheValid && now-FMInventoryCheckedAt<1.0) {
+        [diagnostics addObject:@"inventory-cache throttle"];
+        return FMInventoryCache;
+    }
     NSString *signature=FMInventorySignatureFor(roots,hostMultitask);
+    FMInventoryCheckedAt=now;
     if(FMInventoryCacheValid && [signature isEqualToString:FMInventorySignature]) {
         [diagnostics addObject:@"inventory-cache hit"];
         return FMInventoryCache;

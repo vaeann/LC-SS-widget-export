@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b22"
+#define FM_MENU_VERSION @"1.0.36v31b23"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2089,6 +2089,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)refreshUI;
 - (void)refreshAppsContent;
 - (void)syncCloseBadges;
+- (void)syncCloseBadges:(BOOL)showRunning;
+- (BOOL)appIsForeground:(NSDictionary *)app;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
@@ -2740,6 +2742,14 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [app[@"hidden"] boolValue]?1:0,
             includeRunning?([LCOrbitMultitask isRunningGuest:app]?1:0):0];
     }
+    // 前台 App（绿点归属）也算"运行态"：回到 LC 界面后它会变 none，
+    // 展开时因此走一次就地同步，把残留的绿点摘掉。
+    if(includeRunning) {
+        NSString *foreground=@"none";
+        for(NSDictionary *app in self.apps)
+            if([self appIsForeground:app]) { foreground=FMAppKey(app);break; }
+        [signature appendFormat:@"|fg=%@",foreground];
+    }
     return signature;
 }
 
@@ -3083,7 +3093,15 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
     if(BoolPref(@"haptic",YES)) {
         if(@available(iOS 13.0,*)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurredWithIntensity:.7];
+            // 发生器常驻并提前 prepare：每次展开现 new 一个要等 Taptic 引擎初始化，
+            // 实测这一句能占掉十几到几十毫秒。
+            static UIImpactFeedbackGenerator *medium;
+            static dispatch_once_t once;
+            dispatch_once(&once,^{
+                medium=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+                [medium prepare];
+            });
+            [medium impactOccurredWithIntensity:.7];
         } else {
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
         }
@@ -3143,7 +3161,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         BOOL structureOnly=sameStructure && !reuse;
         if(structureOnly) {
             _panelWarmSignature=signature;
-            [self syncCloseBadges];
+            [self syncCloseBadges:YES];
         }
         CFTimeInterval buildMs=0;
         if(reuse||structureOnly) {
@@ -3983,7 +4001,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         fallback.userInteractionEnabled=NO;
         [box addSubview:fallback];
     }
-    BOOL current=[LCOrbitGuestService isCurrentGuest:app];
+    BOOL current=[self appIsForeground:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
     BOOL hidden=[app[@"hidden"] boolValue];
     BOOL locked=[app[@"locked"] boolValue];
@@ -4529,29 +4547,31 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [cellView addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
                 [cellView addTarget:self action:@selector(switchFromRow:)
                     forControlEvents:UIControlEventTouchUpInside];
-                if([LCOrbitMultitask isRunningGuest:app]) {
-                    // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
-                    // 微微冒头；直径随图标缩放 16~22。
-                    CGFloat badge=MIN(22,MAX(16,icon*.38));
-                    UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
-                    close.translatesAutoresizingMaskIntoConstraints=NO;
-                    [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
-                    close.tag=9240;
-                    close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
-                    objc_setAssociatedObject(close,@selector(closeTaskFromButton:),
-                                             app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    [close addTarget:self action:@selector(closeTaskFromButton:)
-                        forControlEvents:UIControlEventTouchUpInside];
-                    [cellView addSubview:close];
-                    [NSLayoutConstraint activateConstraints:@[
-                        [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
-                            constant:icon*.5-badge*.5+5],
-                        [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
-                            constant:-icon*.5+badge*.5-5],
-                        [close.widthAnchor constraintEqualToConstant:badge],
-                        [close.heightAnchor constraintEqualToConstant:badge]
-                    ]];
-                }
+                // 关闭角标常驻：运行状态只切 hidden，不增删节点。
+                // 这样"打开 App 后才需要显示红叉"永远不用整页重建（实测 ~550ms）。
+                BOOL running=[LCOrbitMultitask isRunningGuest:app];
+                // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
+                // 微微冒头；直径随图标缩放 16~22。
+                CGFloat badge=MIN(22,MAX(16,icon*.38));
+                UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
+                close.translatesAutoresizingMaskIntoConstraints=NO;
+                [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
+                close.tag=9240;
+                close.hidden=!running;
+                close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
+                objc_setAssociatedObject(close,@selector(closeTaskFromButton:),
+                                         app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [close addTarget:self action:@selector(closeTaskFromButton:)
+                    forControlEvents:UIControlEventTouchUpInside];
+                [cellView addSubview:close];
+                [NSLayoutConstraint activateConstraints:@[
+                    [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
+                        constant:icon*.5-badge*.5+5],
+                    [close.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor
+                        constant:-icon*.5+badge*.5-5],
+                    [close.widthAnchor constraintEqualToConstant:badge],
+                    [close.heightAnchor constraintEqualToConstant:badge]
+                ]];
                 [line addSubview:cellView];
             }
             [self addRow:line height:cell to:stack];
@@ -5037,10 +5057,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     _panelWarmSignature=[self panelSignature];
     _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
 }
+// 绿点（呼吸灯）只代表"这个 App 此刻正显示在屏幕上"。回到 LC 主界面后，
+// 任务窗口往往还活着、ActiveWindow 也没清，只看 isCurrentGuest 会一直亮。
+- (BOOL)appIsForeground:(NSDictionary *)app {
+    if(![LCOrbitGuestService isCurrentGuest:app]) return NO;
+    id window=[LCOrbitMultitask activeWindow];
+    UIView *view=[window respondsToSelector:@selector(view)]?[window view]:nil;
+    return view && !view.hidden && view.alpha>.1;
+}
 // 运行状态变化只影响两类标记：关闭角标与当前 App 的呼吸灯。
 // 就地增删/显隐，不重建整页——整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
-// 只有"新任务启动、原本没有角标"这种必须新建角标的情况，才退回整页重建。
-- (void)syncCloseBadges {
+// 网格布局的角标是常驻的，只切 hidden，所以日常不会走到重建；
+// 精简/列表布局首次遇到新任务仍会退回整页重建（那两种布局少用）。
+- (void)syncCloseBadges { [self syncCloseBadges:NO]; }
+// showRunning=YES 用于"展开前"对齐：运行中的一律显示红叉；
+// 通知链路仍用 NO，避免点完 X 关闭动画期间把角标闪回来。
+- (void)syncCloseBadges:(BOOL)showRunning {
     UIView *root=self.panel ?: self.appsScroll;
     if(!root) return;
     // 先把运行状态一次性算成集合：下面要按节点、按角标多次判断，
@@ -5050,7 +5082,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     for(NSDictionary *app in self.apps) {
         NSString *key=FMAppKey(app);
         if([LCOrbitMultitask isRunningGuest:app]) [runningKeys addObject:key];
-        if(!currentKey && [LCOrbitGuestService isCurrentGuest:app]) currentKey=key;
+        if(!currentKey && [self appIsForeground:app]) currentKey=key;
     }
     NSMutableArray<UIView *> *nodes=[NSMutableArray array];
     NSMutableArray<UIView *> *lights=[NSMutableArray array];
@@ -5103,9 +5135,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(!badges[FMAppKey(app)]) { missing=YES; break; }
     }
     if(missing) { [self refreshAppsContent]; return; }
-    // 只隐藏、不主动显示：恢复显示交给重建，避免关闭动画期间把角标"闪回来"。
     for(NSString *key in badges) {
-        if([runningKeys containsObject:key]) continue;
+        if([runningKeys containsObject:key]) { if(showRunning) badges[key].hidden=NO; continue; }
         badges[key].hidden=YES;
     }
     // 界面已与数据对齐，签名同步，收起后仍可复用。
