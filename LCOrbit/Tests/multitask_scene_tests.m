@@ -269,8 +269,8 @@ int main(void) {
         objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         CGRect readyFrame;UIInterfaceOrientation readyOrientation;UIEdgeInsets readyInsets;
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
-            CGRectEqualToRect(readyFrame,CGRectMake(0,0,390,785)) && readyInsets.top==0 && readyInsets.bottom==34,
-            @"switch on shrinks settled Scene height and clears top safe area");
+            CGRectEqualToRect(readyFrame,CGRectMake(0,0,390,844)) && readyInsets.top==59,
+            @"switch on keeps the complete window; the status bar is hidden at apply time instead of shrinking");
         scene.bundleId=@"app.with-own-inset";
         LayoutPreferences[@"guestOwnTopInset.app.with-own-inset"]=@NO;
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
@@ -288,8 +288,8 @@ int main(void) {
             @"malformed preference preserves full height and top safe area");
         scene.bundleId=@"physical.app";
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
-            readyFrame.size.height==785 && readyInsets.top==0,
-            @"changing another App preserves the enabled physical avoidance policy");
+            readyFrame.size.height==844 && readyInsets.top==59,
+            @"changing another App preserves the enabled compatibility policy");
         LayoutPreferences=nil;scene.bundleId=nil;
         objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UpdateScene(window,nil);
@@ -455,17 +455,21 @@ int main(void) {
                 scene.usesHostingControllerAPI=hostingAPI.boolValue;
                 PresenterReady(scene,NSSelectorFromString(@"setUpAppPresenter"));
                 OrbitSettings *first=scene.initialSettings;
-                Expect(scene.settings.frame.size.height==(physicalAvoidance.boolValue?785:844) &&
-                    scene.settings.safeAreaEdgeInsets.top==(physicalAvoidance.boolValue?0:59),
-                    @"both presenter APIs settle to reduced height and zero top inset when on, full height and top safe area when off");
+                Expect(scene.settings.frame.size.height==844 && scene.settings.safeAreaEdgeInsets.top==59,
+                    @"both policies keep the complete window and the physical top safe area");
                 Expect(CGRectEqualToRect(first.frame,CGRectMake(0,0,390,844)) && first.interfaceOrientation==1,
                     hostingAPI.boolValue?@"hosting initial parameters have full portrait dimensions before configure":@"legacy initial parameters have full portrait dimensions before create");
                 Expect(first.safeAreaInsetsPortrait.top==59 && first.safeAreaInsetsPortrait.bottom==34 &&
                     first.peripheryInsets.top==59 && first.safeAreaEdgeInsets.bottom==34,
                     hostingAPI.boolValue?@"hosting initial parameters reserve statusbar and home indicator":@"legacy initial parameters reserve statusbar and home indicator");
-                Expect(first.statusBarHeight==54 && first.statusBarAvoidanceFrame.size.height==54,
-                    @"initial Guest parameters contain full statusbar geometry before launch");
-                Expect(first.canShowAlerts && first.foreground && !first.statusBarDisabled && first.level==1 &&
+                Expect(physicalAvoidance.boolValue ?
+                    (scene.settings.statusBarDisabled && scene.settings.statusBarHeight==0 &&
+                     CGRectEqualToRect(scene.settings.statusBarAvoidanceFrame,CGRectZero) &&
+                     first.statusBarDisabled && first.statusBarHeight==0) :
+                    (!scene.settings.statusBarDisabled && scene.settings.statusBarHeight==54 &&
+                     !first.statusBarDisabled && first.statusBarHeight==54),
+                    @"switch on disables the Guest status bar; switch off keeps LC's statusbar avoidance");
+                Expect(first.canShowAlerts && first.foreground && first.level==1 &&
                     [first.persistenceIdentifier isEqualToString:@"guest-container"],@"initial geometry preserves LC lifecycle and container fields");
             }
         }
