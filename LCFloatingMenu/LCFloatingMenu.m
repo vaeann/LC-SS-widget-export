@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b9"
+#define FM_MENU_VERSION @"1.0.36v31b10"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4901,9 +4901,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     CGFloat slot=compact?(height-4)/MAX(1,items.count):footer.bounds.size.width/items.count;
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
+        // 微珠在右侧时整排镜像：顺序对折，与把手侧的视觉重心对称。
+        // 精简是纵向排列，不涉及左右。
+        NSUInteger order=(compact||self.left)?i:(items.count-1-i);
         CGRect hit=compact?
             CGRectMake(0,4+i*slot,footer.bounds.size.width,slot):
-            CGRectMake(i*slot,0,slot,barHeight);
+            CGRectMake(order*slot,0,slot,barHeight);
         UIControl *button=[[UIControl alloc] initWithFrame:hit];
         button.backgroundColor=UIColor.clearColor;
         button.accessibilityLabel=spec[2];
@@ -8069,8 +8072,10 @@ static UIView *FMDockCard(UIStackView *rows) {
         [_content addSubview:bar];
         CGFloat slot=bar.bounds.size.width/glyphs.count;
         for(NSUInteger index=0;index<glyphs.count;index++) {
+            // 与 buildAppFooter 同一条镜像规则：微珠在右侧时顺序对折。
+            NSUInteger order=_left?index:(glyphs.count-1-index);
             UIView *tile=[self footerTile:glyphs[index] compact:NO size:36];
-            tile.frame=CGRectMake(index*slot+(slot-36)*.5,(barH-36)*.5+2,36,36);
+            tile.frame=CGRectMake(order*slot+(slot-36)*.5,(barH-36)*.5+2,36,36);
             [bar addSubview:tile];
             [items addObject:tile];
         }
