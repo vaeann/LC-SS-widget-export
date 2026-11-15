@@ -635,60 +635,28 @@ static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
     window.view.alpha=visible?1:0;
     window.view.hidden=!visible;
 }
-// 兼容开关的语义是"与单任务一致"：这类 App 单任务时系统状态栏本来就是隐藏的。
-// Guest 的 settings.statusBarDisabled 只影响虚拟屏，真状态栏归 LC 宿主（前台进程）。
-// b16/b17 实锤：iOS 16+ 的 UIApplication 已经不再提供 statusBar / statusBarWindow
-// （调用直接抛 NSException 并崩溃），状态栏改由 windowScene 的 statusBarManager 托管；
-// 唯一可用的开关是私有的 _setOverridingStatusBarHidden:（及其带 animationParameters 的变体）。
+// 兼容开关 = 与单任务一致：这类 App 处于前台时把 LC 宿主的状态栏藏掉。
+// iOS 16+ 的 UIApplication 已不再提供 statusBar / statusBarWindow（调用即抛异常），
+// 唯一入口是 windowScene.statusBarManager 的私有 _setOverridingStatusBarHidden:。
+// 只在"状态真的翻转"时调用一次：不 swizzle 控制器、不广播 setNeedsStatusBarAppearanceUpdate，
+// 避免每次布局都被拖一遍（b18 的慢就慢在这里）。
 static BOOL FMHostStatusBarHidden=NO;
-static NSMutableDictionary<NSString *,NSValue *> *FMStatusBarOriginals=nil;
-static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector);
-static void FMSwizzleStatusBarClass(Class cls);
-// 只换根 VC 会漏掉真正回答偏好的子控制器（SwiftUI hosting / 容器子 VC），整棵树都换。
-static void FMSwizzleStatusBarHierarchy(UIViewController *controller) {
-    if(!controller) return;
-    FMSwizzleStatusBarClass(object_getClass(controller));
-    for(UIViewController *child in controller.childViewControllers)
-        FMSwizzleStatusBarHierarchy(child);
-    FMSwizzleStatusBarHierarchy(controller.presentedViewController);
-}
-static void FMSwizzleStatusBarClass(Class cls) {
-    if(!cls) return;
-    Method method=class_getInstanceMethod(cls,@selector(prefersStatusBarHidden));
-    if(!method) return;
-    IMP current=method_getImplementation(method);
-    if(current==(IMP)FMHostPrefersStatusBarHidden) return;
-    if(!FMStatusBarOriginals) FMStatusBarOriginals=[NSMutableDictionary dictionary];
-    FMStatusBarOriginals[NSStringFromClass(cls)]=[NSValue valueWithPointer:current];
-    method_setImplementation(method,(IMP)FMHostPrefersStatusBarHidden);
-}
-static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector) {
-    if(FMHostStatusBarHidden) return YES;
-    for(Class cls=object_getClass(owner);cls;cls=class_getSuperclass(cls)) {
-        NSValue *original=FMStatusBarOriginals[NSStringFromClass(cls)];
-        if(!original) continue;
-        BOOL(*implementation)(id,SEL)=(BOOL(*)(id,SEL))original.pointerValue;
-        if(implementation) return implementation(owner,selector);
-        break;
-    }
-    return NO;
-}
-// 返回实际用上的私有方法名，便于日志核对；任何一个都不在时返回 nil。
-static NSString *SetOverrideStatusBarHidden(BOOL hidden) {
+static NSString *FMApplyStatusBarOverride(BOOL hidden) {
     NSString *used=nil;
-    SEL single=NSSelectorFromString(@"_setOverridingStatusBarHidden:");
+    SEL plain=NSSelectorFromString(@"_setOverridingStatusBarHidden:");
     SEL animated=NSSelectorFromString(@"_setOverridingStatusBarHidden:animationParameters:");
     for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
         UIStatusBarManager *manager=((UIWindowScene *)scene).statusBarManager;
         if(!manager) continue;
         @try {
-            if([manager respondsToSelector:animated]) {
+            // 无动画版本优先：打开 App 时不再额外跑一段状态栏过渡。
+            if([manager respondsToSelector:plain]) {
+                ((void(*)(id,SEL,BOOL))objc_msgSend)(manager,plain,hidden);
+                used=@"overriding";
+            } else if([manager respondsToSelector:animated]) {
                 ((void(*)(id,SEL,BOOL,id))objc_msgSend)(manager,animated,hidden,nil);
                 used=@"overriding+animation";
-            } else if([manager respondsToSelector:single]) {
-                ((void(*)(id,SEL,BOOL))objc_msgSend)(manager,single,hidden);
-                used=@"overriding";
             }
         } @catch(NSException *exception) {
             (void)exception;
@@ -704,42 +672,18 @@ static void UpdateHostStatusBarVisibility(void) {
         dispatch_async(dispatch_get_main_queue(),^{ UpdateHostStatusBarVisibility(); });
         return;
     }
-    FMSwizzleStatusBarClass(UIViewController.class);
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        for(UIWindow *window in ((UIWindowScene *)scene).windows)
-            FMSwizzleStatusBarHierarchy(window.rootViewController);
-    }
     UIViewController *active=[LCOrbitMultitask activeWindow];
     NSString *bundle=[(id)SceneController(active) bundleId];
     BOOL hide=[LCOrbitMultitask isEnabled] && active && !OrbitPiPProtectedWindow(active) &&
         PhysicalTopAvoidanceEnabled(bundle);
     if(hide==FMHostStatusBarHidden) return;
-    NSString *setter=SetOverrideStatusBarHidden(hide);
-    // 没拿到 statusBarManager 时不记状态，下一次布局继续尝试（否则会永远停在"以为已生效"）。
+    CFAbsoluteTime start=CFAbsoluteTimeGetCurrent();
+    NSString *setter=FMApplyStatusBarOverride(hide);
+    // 没拿到 statusBarManager 时不记状态，下一次布局继续尝试。
     if(!setter) return;
     FMHostStatusBarHidden=hide;
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        for(UIWindow *window in ((UIWindowScene *)scene).windows)
-            [window.rootViewController setNeedsStatusBarAppearanceUpdate];
-    }
-    UIWindow *host=nil;
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        for(UIWindow *window in ((UIWindowScene *)scene).windows)
-            if(window.windowLevel==UIWindowLevelNormal && window.rootViewController) { host=window;break; }
-        if(host) break;
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
-        NSMutableDictionary *details=[@{@"hide":@(hide),@"guestBundle":bundle?:@"none",
-            @"setter":setter?:@"none",
-            @"hostStatusBarFrame":host?NSStringFromCGRect(host.windowScene.statusBarManager.statusBarFrame):@"none"} mutableCopy];
-        UIStatusBarManager *manager=host.windowScene.statusBarManager;
-        if([manager respondsToSelector:NSSelectorFromString(@"isStatusBarHidden")])
-            details[@"statusBarHidden"]=@([(id)manager isStatusBarHidden]);
-        [LCOrbitLog appendEvent:@"host-status-bar" details:details kind:@"runtime"];
-    });
+    [LCOrbitLog appendEvent:@"host-status-bar" details:@{@"hide":@(hide),@"guestBundle":bundle?:@"none",
+        @"setter":setter,@"ms":@((CFAbsoluteTimeGetCurrent()-start)*1000.0)} kind:@"runtime"];
 }
 static void Activate(UIViewController *window,SEL selector) {
     if(![LCOrbitMultitask isEnabled] || OrbitPiPProtectedWindow(window)) return;
