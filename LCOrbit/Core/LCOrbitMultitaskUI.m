@@ -636,44 +636,21 @@ static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
     window.view.hidden=!visible;
 }
 // 兼容开关的语义是"与单任务一致"：这类 App 单任务时系统状态栏本来就是隐藏的。
-// Guest 的 settings.statusBarDisabled 只影响虚拟屏，真状态栏由 LC 宿主（前台进程）
-// 绘制，只能在宿主侧按"当前活动窗口所属 App 是否开了兼容开关"来隐藏。
-// 实测 b14：settings 三件套（Disabled/Height/Avoidance）全部生效，状态栏仍在，
-// 说明 LC 走的是进程级状态栏，不是 VC 偏好。这里按可信度依次尝试四种手段。
+// Guest 的 settings.statusBarDisabled 只影响虚拟屏，真状态栏归 LC 宿主（前台进程）。
+// b16/b17 实锤：iOS 16+ 的 UIApplication 已经不再提供 statusBar / statusBarWindow
+// （调用直接抛 NSException 并崩溃），状态栏改由 windowScene 的 statusBarManager 托管；
+// 唯一可用的开关是私有的 _setOverridingStatusBarHidden:（及其带 animationParameters 的变体）。
 static BOOL FMHostStatusBarHidden=NO;
 static NSMutableDictionary<NSString *,NSValue *> *FMStatusBarOriginals=nil;
-static NSMutableArray<UIWindow *> *FMHiddenStatusWindows=nil;
-static BOOL FMStatusBarViewHidden=NO;
-static NSUInteger FMStatusBarQueries=0;
 static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector);
 static void FMSwizzleStatusBarClass(Class cls);
-// 只 swizzle 根 VC 会漏掉真正回答偏好的子控制器（SwiftUI hosting / 容器子 VC），
-// 这里把整棵控制器树都换掉类实现，谁被问都返回同一个答案。
+// 只换根 VC 会漏掉真正回答偏好的子控制器（SwiftUI hosting / 容器子 VC），整棵树都换。
 static void FMSwizzleStatusBarHierarchy(UIViewController *controller) {
     if(!controller) return;
     FMSwizzleStatusBarClass(object_getClass(controller));
     for(UIViewController *child in controller.childViewControllers)
         FMSwizzleStatusBarHierarchy(child);
     FMSwizzleStatusBarHierarchy(controller.presentedViewController);
-}
-// 一次性探针：把这几个类里带 statusBar/hidden 的实例方法名打进日志，
-// 下一轮如果还压不住，就不用再猜哪些私有开关可用。
-static NSString *FMStatusBarSelectorProbe(void) {
-    NSMutableArray<NSString *> *names=[NSMutableArray array];
-    for(NSString *className in @[@"UIApplication",@"UIWindowScene",@"UIStatusBarManager"]) {
-        Class cls=NSClassFromString(className);
-        if(!cls) continue;
-        unsigned int count=0;
-        Method *methods=class_copyMethodList(cls,&count);
-        for(unsigned int i=0;i<count;i++) {
-            NSString *name=NSStringFromSelector(method_getName(methods[i]));
-            if([name rangeOfString:@"idden"].location!=NSNotFound ||
-               [name rangeOfString:@"statusBar"].location!=NSNotFound)
-                [names addObject:[className stringByAppendingFormat:@".%@",name]];
-        }
-        free(methods);
-    }
-    return [names componentsJoinedByString:@"|"];
 }
 static void FMSwizzleStatusBarClass(Class cls) {
     if(!cls) return;
@@ -686,7 +663,6 @@ static void FMSwizzleStatusBarClass(Class cls) {
     method_setImplementation(method,(IMP)FMHostPrefersStatusBarHidden);
 }
 static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector) {
-    FMStatusBarQueries++;
     if(FMHostStatusBarHidden) return YES;
     for(Class cls=object_getClass(owner);cls;cls=class_getSuperclass(cls)) {
         NSValue *original=FMStatusBarOriginals[NSStringFromClass(cls)];
@@ -697,62 +673,29 @@ static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector) {
     }
     return NO;
 }
-// b16 日志实锤：进程里按 windowLevel 找不到状态栏窗口，但 UIApplication 上有一整套
-// 私有入口（statusBarWindow / _statusBarWindow / _statusBarWindowIfExistsForScene: /
-// statusBar 视图）。iOS 16+ 的状态栏是「UIApplication 自己的窗口」，不挂在场景窗口列表里，
-// 所以只能顺着这些私有 getter 拿到它，直接收起。
-static NSArray<UIWindow *> *FMStatusBarWindows(void) {
-    NSMutableArray<UIWindow *> *result=[NSMutableArray array];
-    void (^add)(id)=^(id value) {
-        if([value isKindOfClass:UIWindow.class] && ![result containsObject:value])
-            [result addObject:(UIWindow *)value];
-    };
-    UIApplication *app=UIApplication.sharedApplication;
-    for(NSString *name in @[@"statusBarWindow",@"_statusBarWindow"]) {
-        SEL selector=NSSelectorFromString(name);
-        if([app respondsToSelector:selector]) add(((id(*)(id,SEL))objc_msgSend)(app,selector));
-    }
-    SEL sceneWindow=NSSelectorFromString(@"_statusBarWindowIfExistsForScene:");
-    for(UIScene *scene in app.connectedScenes) {
+// 返回实际用上的私有方法名，便于日志核对；任何一个都不在时返回 nil。
+static NSString *SetOverrideStatusBarHidden(BOOL hidden) {
+    NSString *used=nil;
+    SEL single=NSSelectorFromString(@"_setOverridingStatusBarHidden:");
+    SEL animated=NSSelectorFromString(@"_setOverridingStatusBarHidden:animationParameters:");
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
-        if([app respondsToSelector:sceneWindow])
-            add(((id(*)(id,SEL,id))objc_msgSend)(app,sceneWindow,scene));
-        for(UIWindow *window in ((UIWindowScene *)scene).windows)
-            if(window.windowLevel==UIWindowLevelStatusBar) add(window);
-    }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    for(UIWindow *window in app.windows)
-        if(window.windowLevel==UIWindowLevelStatusBar) add(window);
-#pragma clang diagnostic pop
-    return result;
-}
-static UIView *FMStatusBarView(void) {
-    UIApplication *app=UIApplication.sharedApplication;
-    SEL selector=NSSelectorFromString(@"statusBar");
-    if(![app respondsToSelector:selector]) return nil;
-    id value=((id(*)(id,SEL))objc_msgSend)(app,selector);
-    return [value isKindOfClass:UIView.class]?value:nil;
-}
-static void SetStatusBarWindowsHidden(BOOL hidden) {
-    if(hidden) {
-        if(FMHiddenStatusWindows.count) return;
-        FMHiddenStatusWindows=[NSMutableArray array];
-        for(UIWindow *window in FMStatusBarWindows()) {
-            if(window.hidden) continue;
-            window.hidden=YES;
-            [FMHiddenStatusWindows addObject:window];
+        UIStatusBarManager *manager=((UIWindowScene *)scene).statusBarManager;
+        if(!manager) continue;
+        @try {
+            if([manager respondsToSelector:animated]) {
+                ((void(*)(id,SEL,BOOL,id))objc_msgSend)(manager,animated,hidden,nil);
+                used=@"overriding+animation";
+            } else if([manager respondsToSelector:single]) {
+                ((void(*)(id,SEL,BOOL))objc_msgSend)(manager,single,hidden);
+                used=@"overriding";
+            }
+        } @catch(NSException *exception) {
+            (void)exception;
+            used=@"exception";
         }
-        UIView *bar=FMStatusBarView();
-        if(bar && !bar.hidden) {
-            bar.hidden=YES;
-            FMStatusBarViewHidden=YES;
-        }
-    } else {
-        for(UIWindow *window in FMHiddenStatusWindows) window.hidden=NO;
-        [FMHiddenStatusWindows removeAllObjects];
-        if(FMStatusBarViewHidden) { UIView *bar=FMStatusBarView(); if(bar) bar.hidden=NO; FMStatusBarViewHidden=NO; }
     }
+    return used;
 }
 // 只有"当前活动窗口 = 开了兼容开关的 App"才隐藏宿主状态栏；回主界面、
 // 切到别的 App、关窗口、关掉开关都会恢复，避免 LC 自己没状态栏。
@@ -771,43 +714,14 @@ static void UpdateHostStatusBarVisibility(void) {
     NSString *bundle=[(id)SceneController(active) bundleId];
     BOOL hide=[LCOrbitMultitask isEnabled] && active && !OrbitPiPProtectedWindow(active) &&
         PhysicalTopAvoidanceEnabled(bundle);
-    if(hide==FMHostStatusBarHidden && ((hide && FMHiddenStatusWindows.count) || (!hide && !FMHiddenStatusWindows.count))) return;
+    if(hide==FMHostStatusBarHidden) return;
     FMHostStatusBarHidden=hide;
-    // ① 进程级私有开关：LC 单任务全屏很可能就是它
-    SEL privateSelector=NSSelectorFromString(@"_setStatusBarHidden:animated:");
-    BOOL privateAvailable=[UIApplication.sharedApplication respondsToSelector:privateSelector];
-    if(privateAvailable)
-        ((void(*)(id,SEL,BOOL,BOOL))objc_msgSend)(UIApplication.sharedApplication,privateSelector,hide,YES);
-    // ② LC 若声明由 App 全局控制状态栏，控制器偏好不生效，用旧 API 补一刀
-    id flag=[NSBundle.mainBundle objectForInfoDictionaryKey:@"UIViewControllerBasedStatusBarAppearance"];
-    if(flag && ![flag boolValue]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        [UIApplication.sharedApplication setStatusBarHidden:hide withAnimation:UIStatusBarAnimationNone];
-#pragma clang diagnostic pop
-    }
-    // ③ 私有成品接口：直接按"当前风格 + 当前朝向 + hidden"重设状态栏
-    SEL setupSelector=NSSelectorFromString(@"_setupStatusBarWithRequestedStyle:orientation:hidden:");
-    BOOL setupAvailable=[UIApplication.sharedApplication respondsToSelector:setupSelector];
-    if(setupAvailable) {
-        NSInteger style=0,orientation=0;
-        SEL styleSelector=NSSelectorFromString(@"statusBarStyle");
-        if([UIApplication.sharedApplication respondsToSelector:styleSelector])
-            style=((NSInteger(*)(id,SEL))objc_msgSend)(UIApplication.sharedApplication,styleSelector);
-        SEL orientationSelector=NSSelectorFromString(@"statusBarOrientation");
-        if([UIApplication.sharedApplication respondsToSelector:orientationSelector])
-            orientation=((NSInteger(*)(id,SEL))objc_msgSend)(UIApplication.sharedApplication,orientationSelector);
-        ((void(*)(id,SEL,NSInteger,NSInteger,BOOL))objc_msgSend)(UIApplication.sharedApplication,
-            setupSelector,style,orientation,hide);
-    }
-    // ④ 控制器偏好 + 刷新
+    NSString *setter=SetOverrideStatusBarHidden(hide);
     for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
         for(UIWindow *window in ((UIWindowScene *)scene).windows)
             [window.rootViewController setNeedsStatusBarAppearanceUpdate];
     }
-    // ④ 兜底：直接收起状态栏窗口
-    SetStatusBarWindowsHidden(hide);
     UIWindow *host=nil;
     for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if(![scene isKindOfClass:UIWindowScene.class]) continue;
@@ -815,24 +729,13 @@ static void UpdateHostStatusBarVisibility(void) {
             if(window.windowLevel==UIWindowLevelNormal && window.rootViewController) { host=window;break; }
         if(host) break;
     }
-    NSMutableArray<NSString *> *windowInfo=[NSMutableArray array];
-    for(UIWindow *statusWindow in FMStatusBarWindows())
-        [windowInfo addObject:[NSString stringWithFormat:@"%@:%.0f",NSStringFromClass(object_getClass(statusWindow)),statusWindow.windowLevel]];
-    UIView *statusBarView=FMStatusBarView();
-    NSMutableDictionary *details=[@{@"hide":@(hide),@"guestBundle":bundle?:@"none",
-        @"privateStatusBarAPI":@(privateAvailable),
-        @"setupStatusBarAPI":@(setupAvailable),
-        @"statusWindowsHidden":@(FMHiddenStatusWindows.count),
-        @"statusWindowInfo":[windowInfo componentsJoinedByString:@","]?:@"none",
-        @"statusBarView":statusBarView?NSStringFromClass(object_getClass(statusBarView)):@"none",
-        @"queries":@(FMStatusBarQueries),
-        @"plistBased":[NSBundle.mainBundle objectForInfoDictionaryKey:@"UIViewControllerBasedStatusBarAppearance"]?:@"unset",
-        @"rootClass":host.rootViewController?NSStringFromClass(object_getClass(host.rootViewController)):@"none",
-        @"selectors":FMStatusBarSelectorProbe(),
-        @"hostStatusBarFrame":host?NSStringFromCGRect(host.windowScene.statusBarManager.statusBarFrame):@"none"} mutableCopy];
-    if(host && [host.windowScene.statusBarManager respondsToSelector:NSSelectorFromString(@"isStatusBarHidden")])
-        details[@"statusBarHidden"]=@([(id)host.windowScene.statusBarManager isStatusBarHidden]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        NSMutableDictionary *details=[@{@"hide":@(hide),@"guestBundle":bundle?:@"none",
+            @"setter":setter?:@"none",
+            @"hostStatusBarFrame":host?NSStringFromCGRect(host.windowScene.statusBarManager.statusBarFrame):@"none"} mutableCopy];
+        UIStatusBarManager *manager=host.windowScene.statusBarManager;
+        if([manager respondsToSelector:NSSelectorFromString(@"isStatusBarHidden")])
+            details[@"statusBarHidden"]=@([(id)manager isStatusBarHidden]);
         [LCOrbitLog appendEvent:@"host-status-bar" details:details kind:@"runtime"];
     });
 }
