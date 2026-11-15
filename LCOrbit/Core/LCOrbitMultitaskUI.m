@@ -628,6 +628,66 @@ static void RestoreAppearance(UIViewController *window) {
     [(id)window appSceneVCWillActivateScene:SceneController(window)];
 }
 
+// 兼容开关的语义是"与单任务一致"：这类 App 单任务时系统状态栏本来就是隐藏的。
+// Guest 的 settings.statusBarDisabled 只影响虚拟屏，真状态栏由 LC 宿主（前台进程）
+// 绘制，只能在宿主侧按"当前活动窗口所属 App 是否开了兼容开关"来隐藏。
+static BOOL FMHostStatusBarHidden=NO;
+static NSMutableDictionary<NSString *,NSValue *> *FMStatusBarOriginals=nil;
+static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector);
+static void FMSwizzleStatusBarClass(Class cls) {
+    if(!cls) return;
+    Method method=class_getInstanceMethod(cls,@selector(prefersStatusBarHidden));
+    if(!method) return;
+    IMP current=method_getImplementation(method);
+    if(current==(IMP)FMHostPrefersStatusBarHidden) return;
+    if(!FMStatusBarOriginals) FMStatusBarOriginals=[NSMutableDictionary dictionary];
+    FMStatusBarOriginals[NSStringFromClass(cls)]=[NSValue valueWithPointer:current];
+    method_setImplementation(method,(IMP)FMHostPrefersStatusBarHidden);
+}
+static BOOL FMHostPrefersStatusBarHidden(id owner,SEL selector) {
+    if(FMHostStatusBarHidden) return YES;
+    for(Class cls=object_getClass(owner);cls;cls=class_getSuperclass(cls)) {
+        NSValue *original=FMStatusBarOriginals[NSStringFromClass(cls)];
+        if(!original) continue;
+        BOOL(*implementation)(id,SEL)=(BOOL(*)(id,SEL))original.pointerValue;
+        if(implementation) return implementation(owner,selector);
+        break;
+    }
+    return NO;
+}
+// 只有"当前活动窗口 = 开了兼容开关的 App"才隐藏宿主状态栏；回主界面、
+// 切到别的 App、关窗口、关掉开关都会恢复，避免 LC 自己没状态栏。
+static void UpdateHostStatusBarVisibility(void) {
+    if(!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(),^{ UpdateHostStatusBarVisibility(); });
+        return;
+    }
+    FMSwizzleStatusBarClass(UIViewController.class);
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if(![scene isKindOfClass:UIWindowScene.class]) continue;
+        for(UIWindow *window in ((UIWindowScene *)scene).windows)
+            FMSwizzleStatusBarClass(object_getClass(window.rootViewController));
+    }
+    UIViewController *active=[LCOrbitMultitask activeWindow];
+    BOOL hide=[LCOrbitMultitask isEnabled] && active && !OrbitPiPProtectedWindow(active) &&
+        PhysicalTopAvoidanceEnabled([(id)SceneController(active) bundleId]);
+    if(hide==FMHostStatusBarHidden) return;
+    FMHostStatusBarHidden=hide;
+    // LC 若声明由 App 全局控制状态栏（UIViewControllerBasedStatusBarAppearance=NO），
+    // 控制器偏好不生效，改用旧 API 兜底。
+    id flag=[NSBundle.mainBundle objectForInfoDictionaryKey:@"UIViewControllerBasedStatusBarAppearance"];
+    if(flag && ![flag boolValue]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [UIApplication.sharedApplication setStatusBarHidden:hide withAnimation:UIStatusBarAnimationNone];
+#pragma clang diagnostic pop
+    }
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if(![scene isKindOfClass:UIWindowScene.class]) continue;
+        for(UIWindow *window in ((UIWindowScene *)scene).windows)
+            [window.rootViewController setNeedsStatusBarAppearanceUpdate];
+    }
+}
 static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
     if(OrbitPiPProtectedWindow(window)) return;
     [window.view.layer removeAllAnimations];
@@ -643,6 +703,7 @@ static void Activate(UIViewController *window,SEL selector) {
     [window.view.superview bringSubviewToFront:window.view];
     [LCOrbitMultitask didActivateWindow:window];
     if(Fullscreen()) UpdateScene(window,nil);
+    UpdateHostStatusBarVisibility();
 }
 static id InitWindow(id __attribute__((ns_consumed)) self,SEL selector,NSString *name,NSString *bundle,NSString *container,UIViewController *root) __attribute__((ns_returns_retained));
 static id InitWindow(id __attribute__((ns_consumed)) self,SEL selector,NSString *name,NSString *bundle,NSString *container,UIViewController *root) {
@@ -705,6 +766,7 @@ static void Exited(UIViewController *window,SEL selector,id scene) {
             [window removeFromParentViewController];
         }
     }
+    UpdateHostStatusBarVisibility();
 }
 static void Initialized(UIViewController *window,SEL selector,id scene,NSError *error) {
     ((void(*)(id,SEL,id,id))OriginalInitialized)(window,selector,scene,error);
@@ -972,5 +1034,6 @@ static void PiPStopped(id manager,SEL selector,id controller) {
             });
         }
     }
+    UpdateHostStatusBarVisibility();
 }
 @end
