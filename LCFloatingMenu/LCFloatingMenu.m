@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b21"
+#define FM_MENU_VERSION @"1.0.36v31b22"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2782,6 +2782,23 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // 收起状态且面板还热：保留它，只重画微珠。以前这里无条件销毁，导致每次启停 App
     // 触发 refreshUI 之后，下一次展开都要整页重建（实测 build≈550ms，复用只要 ~60ms）。
     if(!self.isOpen && _panelWarm && self.panel) {
+        // 启动 App 会把 isOpen 置 NO 再 draw：这时面板还是展开的，必须先收起来，
+        // 否则会留下一个"永远不刷新、也点不掉"的面板。收起但保留对象，下次展开只做增量。
+        if(!self.panel.hidden) {
+            CGFloat scale=_morphScale>0?_morphScale:1.0;
+            self.panel.transform=CGAffineTransformMakeScale(scale,scale);
+            if(!CGPointEqualToPoint(_morphRestCenter,CGPointZero)) self.panel.center=_morphRestCenter;
+            self.panel.hidden=YES;
+            self.panel.userInteractionEnabled=NO;
+            if(self.dismissLayer) {
+                self.dismissLayer.hidden=YES;
+                self.dismissLayer.userInteractionEnabled=NO;
+            }
+            if(self.orb) {
+                self.orb.userInteractionEnabled=YES;
+                self.orb.accessibilityElementsHidden=NO;
+            }
+        }
         [self drawOrb];
         return;
     }
@@ -3122,9 +3139,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         BOOL sameStructure=self.panel && self.orb && _panelWarm && _panelWarmStructure &&
                    [structure isEqualToString:_panelWarmStructure];
         BOOL reuse=sameStructure && [signature isEqualToString:_panelWarmSignature?:@""];
-        // 只有运行状态变了：面板内容一字未动，直接复用；角标由 requestAppsRefresh 那条链路同步。
-        BOOL structureOnly=sameStructure && !reuse;
         // 只有运行状态变了：面板内容一字未动，就地同步角标后直接复用。
+        BOOL structureOnly=sameStructure && !reuse;
         if(structureOnly) {
             _panelWarmSignature=signature;
             [self syncCloseBadges];
