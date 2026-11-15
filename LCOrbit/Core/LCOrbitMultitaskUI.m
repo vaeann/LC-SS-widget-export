@@ -628,6 +628,13 @@ static void RestoreAppearance(UIViewController *window) {
     [(id)window appSceneVCWillActivateScene:SceneController(window)];
 }
 
+static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
+    if(OrbitPiPProtectedWindow(window)) return;
+    [window.view.layer removeAllAnimations];
+    window.view.transform=CGAffineTransformIdentity;
+    window.view.alpha=visible?1:0;
+    window.view.hidden=!visible;
+}
 // 兼容开关的语义是"与单任务一致"：这类 App 单任务时系统状态栏本来就是隐藏的。
 // Guest 的 settings.statusBarDisabled 只影响虚拟屏，真状态栏由 LC 宿主（前台进程）
 // 绘制，只能在宿主侧按"当前活动窗口所属 App 是否开了兼容开关"来隐藏。
@@ -687,13 +694,6 @@ static void UpdateHostStatusBarVisibility(void) {
         for(UIWindow *window in ((UIWindowScene *)scene).windows)
             [window.rootViewController setNeedsStatusBarAppearanceUpdate];
     }
-}
-static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
-    if(OrbitPiPProtectedWindow(window)) return;
-    [window.view.layer removeAllAnimations];
-    window.view.transform=CGAffineTransformIdentity;
-    window.view.alpha=visible?1:0;
-    window.view.hidden=!visible;
 }
 static void Activate(UIViewController *window,SEL selector) {
     if(![LCOrbitMultitask isEnabled] || OrbitPiPProtectedWindow(window)) return;
