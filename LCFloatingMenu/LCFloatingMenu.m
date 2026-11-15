@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b23"
+#define FM_MENU_VERSION @"1.0.36v31b24"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -339,6 +339,8 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 
 // Local diagnostics: bounded rotation, no app content, certificates or secrets.
 static void FMLog(NSString *event, NSString *detail) {
+    // 总开关关掉后连入队都不做：日志的唯一目的就是排查，用户不需要时一分钱都不该花。
+    if(![LCOrbitLog loggingEnabled]) return;
     [LCOrbitLog appendEvent:event details:detail kind:@"runtime"];
 }
 
@@ -349,6 +351,7 @@ static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService
 // 高频事件（展开/收起/滚动位置/布局）改走后台串行队列。
 // appendEvent 是「加锁 + 读整个 JSON + 原子写回」，一次展开 3~4 条会吃掉几十毫秒。
 static void FMLogDeferred(NSString *event,id details) {
+    if(![LCOrbitLog loggingEnabled]) return;
     static dispatch_queue_t queue;
     static dispatch_once_t once;
     dispatch_once(&once,^{
@@ -2091,6 +2094,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)syncCloseBadges;
 - (void)syncCloseBadges:(BOOL)showRunning;
 - (BOOL)appIsForeground:(NSDictionary *)app;
+- (void)scheduleWarmPanelBuild;
+- (void)prebuildWarmPanel;
+- (void)schedulePanelRelease;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
@@ -2142,6 +2148,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     NSString *_panelWarmStructure;
     // 应用清单的最近一次扫描时刻：展开太频繁时不必每次都重新校验（服务层校验要 stat 40 个文件）。
     CFTimeInterval _appsScanAt;
+    // 后台预建：LC 主界面稳定后先把面板建好（隐藏），首次展开就不必再等 ~590ms。
+    BOOL _warmBuildScheduled,_prebuilding;
     // 空闲释放用的代次：每次收起 +1，展开再 +1，旧的一次性任务自然失效。
     NSUInteger _panelReleaseToken;
     CGFloat _morphScale,_morphOmega,_morphZeta;
@@ -2255,6 +2263,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.25*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
                 [weakSelf syncScreenAwakeState];
             });
+            // 从后台回来时如果面板不热（例如被 10 分钟空闲释放过），补一次预建。
+            [weakSelf scheduleWarmPanelBuild];
         }];
     }
     if(!FMScreenAwakeBackgroundObserver) {
@@ -2275,6 +2285,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self checkOrbUpdateIfNeeded];
     if(FMHostUI()) {
         [self checkAutoLaunchLastAppIfNeeded];
+        [self scheduleWarmPanelBuild];
     }
 }
 - (void)syncScreenAwakeState {
@@ -2737,12 +2748,31 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         (long)FMMenuLayout(),FMMenuDark()?1:0,FMClearGlassEnabled()?1:0,
         self.panelContentScale,bounds.size.width,bounds.size.height,
         self.left?1:0,self.orbY,safeTop,safeBottom];
+    // 影响行/格布局的样式值也必须进签名：设置页改完图标大小、列数、圆角后，
+    // 面板若还热着又被复用，就会一直显示旧版式（设置"不生效"）。
+    [signature appendFormat:@"style=%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d,%d",
+        FMMenuStyleValue(@"menuExtension"),FMMenuStyleValue(@"menuCornerRadius"),
+        FMMenuStyleValue(@"menuCurveSoftness"),FMMenuStyleValue(@"menuTopPadding"),
+        FMMenuStyleValue(@"menuListIconSize"),FMMenuStyleValue(@"menuCompactIconSize"),
+        FMGridColumns(),(int)FMGridIconSize(),BoolPref(@"iconFrame",NO)?1:0];
     // 这里刻意不记「当前 App」：切换任务时它的变化可以用就地同步纠正（展开前调
     // syncCloseBadges），记进签名会让每次切换都强制重建 400ms。
     for(NSDictionary *app in self.apps) {
         [signature appendFormat:@"|%@:%d%d",app[@"identity"],
             [app[@"hidden"] boolValue]?1:0,
             includeRunning?([LCOrbitMultitask isRunningGuest:app]?1:0):0];
+    }
+    // 最近打开置顶会改变行顺序，而顺序变了旧面板就是错的：把它写进结构签名，
+    // 顺序一变就走重建（不开这个开关的人不受影响，签名内容一字不变）。
+    if(includeRunning==NO && BoolPref(@"recentAppsFirst",NO)) {
+        // 只取最近 12 个 + 当前前台：足够反映"置顶"变化，又不必为签名排一次全序。
+        id stored=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
+        NSArray *recent=[stored isKindOfClass:NSArray.class]?stored:@[];
+        NSArray *top=recent.count>12?[recent subarrayWithRange:NSMakeRange(0,12)]:recent;
+        NSString *foreground=@"none";
+        for(NSDictionary *app in self.apps)
+            if([self appIsForeground:app]) { foreground=FMAppKey(app);break; }
+        [signature appendFormat:@"|order=%@|top=%@",[top componentsJoinedByString:@","],foreground];
     }
     // 前台 App（绿点归属）也算"运行态"：回到 LC 界面后它会变 none，
     // 展开时因此走一次就地同步，把残留的绿点摘掉。
@@ -2759,6 +2789,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)prewarmIcons {
     NSArray<NSDictionary *> *apps=self.apps;
     if(!apps.count) return;
+    // 30 秒内只预热一次：缓存命中时这活儿纯属白跑，还会和展开动画抢 IO。
+    static CFTimeInterval lastPrewarm;
+    CFTimeInterval now=CACurrentMediaTime();
+    if(now-lastPrewarm<30) return;
+    lastPrewarm=now;
     // 分批预热：一口气读完所有图标会和主线程抢文件 IO，App 多时表现为展开卡顿。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
         NSUInteger batch=8;
@@ -2775,6 +2810,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 
 - (void)draw {
     if(!self.window) return;
+    // 后台预建期间触发的刷新先记下来，等预建结束再跑，避免嵌套建第二块面板。
+    if(_prebuilding) { _drawDeferred=YES; return; }
     // 面板一出现就把触感引擎预热，第一次点图标也不会晚半拍。
     FMWarmTapHaptic();
     // A scene detached mid-flight leaves a morph with no drawer to animate.
@@ -2788,6 +2825,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!visible) {
         self.isOpen=NO;
         [self removePanel];
+        // 面板已销毁，热标记必须一起清：否则下次显示时会拿 nil 面板去比对签名。
+        _panelWarm=NO;
+        _panelWarmSignature=nil;
+        _panelWarmStructure=nil;
         [self.orb removeFromSuperview];self.orb=nil;
         return;
     }
@@ -3468,20 +3509,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             self.panel.center=_morphRestCenter;
         }
         _panelWarm=self.panel!=nil;
-        // 空闲 10 分钟后释放常驻面板：否则一整棵视图树（含全部图标）会一直挂着。
-        // 5 分钟太短，容易正好在用户下次点开之前释放掉，白等一次重建。
-        NSUInteger token=++_panelReleaseToken;
-        __weak typeof(self) weakSelf=self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(600*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
-            __strong typeof(weakSelf) strongSelf=weakSelf;
-            if(!strongSelf || strongSelf->_panelReleaseToken!=token) return;
-            if(strongSelf.isOpen || !strongSelf->_panelWarm || !strongSelf.panel) return;
-            [strongSelf removePanel];
-            strongSelf->_panelWarm=NO;
-            strongSelf->_panelWarmSignature=nil;
-            strongSelf->_panelWarmStructure=nil;
-            FMLogDeferred(@"panel-release",@"idle-10min");
-        });
+        [self schedulePanelRelease];
         self.panel.hidden=YES;
         self.panel.userInteractionEnabled=NO;
         if(self.dismissLayer) {
@@ -4092,6 +4120,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             }
         }
         self.apps=InstalledApps();
+        _appsScanAt=CACurrentMediaTime();
         [self draw];
     }
 }
@@ -4198,6 +4227,53 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 // The strip of favorites and the row below it, from that same start.
 - (CGFloat)menuHeaderDepth { return 58; }
+// 展开时才建面板要 ~590ms（图标解码 + 19 个格子 + AutoLayout）。既然面板本来就是
+// 常驻的，就在 LC 主界面稳定后先建好再藏起来，用户第一次展开直接走复用路径。
+- (void)scheduleWarmPanelBuild {
+    if(_warmBuildScheduled || _panelWarm || self.isOpen) return;
+    _warmBuildScheduled=YES;
+    __weak typeof(self) weakSelf=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2.0*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        typeof(self) strongSelf=weakSelf;
+        if(!strongSelf) return;
+        strongSelf->_warmBuildScheduled=NO;
+        [strongSelf prebuildWarmPanel];
+    });
+}
+- (void)prebuildWarmPanel {
+    if(_prebuilding || self.isOpen || _panelWarm || !self.window || self.settingsWindow) return;
+    // 正在拖微珠/跑展开动画时别抢主线程：等下一次机会。
+    if(_isPanning || _morphActive) { [self scheduleWarmPanelBuild]; return; }
+    if(![LCOrbitMultitask shouldShowFloatingMenu]) return;
+    if(self.launchPending) return;
+    if(!self.apps.count) {
+        self.apps=InstalledApps();
+        _appsScanAt=CACurrentMediaTime();
+    }
+    if(!self.apps.count) return;
+    self.page=@"apps";
+    [self loadAppsScroll];   // 让面板按保存的滚动位置构建，首次展开不会跳回顶部
+    _prebuilding=YES;
+    [self buildPanel];
+    _prebuilding=NO;
+    if(!self.panel) { [self scheduleWarmPanelBuild]; return; }
+    // 建完立刻藏起来：同一轮 runloop 内设置 hidden，不会闪一帧。
+    CGFloat scale=_morphScale>0?_morphScale:1.0;
+    self.panel.transform=CGAffineTransformMakeScale(scale,scale);
+    if(!CGPointEqualToPoint(_morphRestCenter,CGPointZero)) self.panel.center=_morphRestCenter;
+    self.panel.hidden=YES;
+    self.panel.userInteractionEnabled=NO;
+    if(self.dismissLayer) {
+        self.dismissLayer.hidden=YES;
+        self.dismissLayer.userInteractionEnabled=NO;
+    }
+    _panelWarmSignature=[self panelSignature];
+    _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
+    _panelWarm=self.panel!=nil;
+    if(_panelWarm) [self schedulePanelRelease];
+    if(_drawDeferred) { _drawDeferred=NO; [self draw]; }
+    FMLogDeferred(@"panel-prebuild",_panelWarm?@"warm":@"failed");
+}
 - (void)buildPanel {
     CGRect bounds=self.window.bounds;
     CGFloat safeTop=MAX(38,self.window.safeAreaInsets.top+6);
@@ -4463,13 +4539,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!BoolPref(@"recentAppsFirst",NO) || apps.count<2) return apps;
     id preference=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
     NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
+    // 当前 App 只认"真的在屏幕上"的那一个：回 LC 界面后旧窗口还活着，
+    // 用 isCurrentGuest 会把它继续顶在最前面（和绿点判定保持一致）。
+    NSString *foregroundKey=nil;
+    for(NSDictionary *app in apps)
+        if([self appIsForeground:app]) { foregroundKey=FMAppKey(app);break; }
     NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
     [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
         BOOL hiddenA=[a[@"hidden"] boolValue];
         BOOL hiddenB=[b[@"hidden"] boolValue];
         if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-        BOOL currentA=[LCOrbitGuestService isCurrentGuest:a];
-        BOOL currentB=[LCOrbitGuestService isCurrentGuest:b];
+        BOOL currentA=foregroundKey && [FMAppKey(a) isEqualToString:foregroundKey];
+        BOOL currentB=foregroundKey && [FMAppKey(b) isEqualToString:foregroundKey];
         if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
         NSUInteger indexA=[recent indexOfObject:FMAppKey(a)];
         NSUInteger indexB=[recent indexOfObject:FMAppKey(b)];
@@ -5070,6 +5151,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (BOOL)appIsForeground:(NSDictionary *)app {
     if(![LCOrbitGuestService isCurrentGuest:app]) return NO;
     id window=[LCOrbitMultitask activeWindow];
+    // 没加载视图的控制器不能碰 .view：那会触发 loadView，反而制造一次布局。
+    if(![window respondsToSelector:@selector(isViewLoaded)] || ![window isViewLoaded]) return NO;
     UIView *view=[window respondsToSelector:@selector(view)]?[window view]:nil;
     return view && !view.hidden && view.alpha>.1;
 }
@@ -5077,6 +5160,21 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 // 就地增删/显隐，不重建整页——整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
 // 网格布局的角标是常驻的，只切 hidden，所以日常不会走到重建；
 // 精简/列表布局首次遇到新任务仍会退回整页重建（那两种布局少用）。
+// 常驻面板的空闲释放：收起时和后台预建后都要安排，否则预建出来的那棵视图树永远不回收。
+- (void)schedulePanelRelease {
+    NSUInteger token=++_panelReleaseToken;
+    __weak typeof(self) weakSelf=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(600*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        typeof(self) strongSelf=weakSelf;
+        if(!strongSelf || strongSelf->_panelReleaseToken!=token) return;
+        if(strongSelf.isOpen || !strongSelf->_panelWarm || !strongSelf.panel) return;
+        [strongSelf removePanel];
+        strongSelf->_panelWarm=NO;
+        strongSelf->_panelWarmSignature=nil;
+        strongSelf->_panelWarmStructure=nil;
+        FMLogDeferred(@"panel-release",@"idle-10min");
+    });
+}
 - (void)syncCloseBadges { [self syncCloseBadges:NO]; }
 // showRunning=YES 用于"展开前"对齐：运行中的一律显示红叉；
 // 通知链路仍用 NO，避免点完 X 关闭动画期间把角标闪回来。
@@ -5388,7 +5486,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         hint.textColor=FMThemeColor(FMColorSecondary);
         [s addArrangedSubview:hint];
         [self spacer:s size:14];
-        [self section:@"性能诊断" sub:@"开启后每次展开记录 scan / log / build 分段耗时；日志量会增加，排查完建议关闭。" in:s];
+        [self section:@"性能诊断" sub:@"运行日志关闭后一条都不写（含 tweak 审计），可换回最快速度；记录展开耗时仅用于排查，10 分钟后自动关闭。" in:s];
+        [self settingSwitch:s title:@"运行日志" key:@"logsEnabled" defaultValue:YES tag:33];
+        // TODO(加速调试收尾后移除)：perfTiming 开关 + open-timing 打点都是临时诊断项，
+        // 展开速度定稿后应连同 scan/log/build 的分段计时一起删掉。
         [self settingSwitch:s title:@"记录展开耗时" key:@"perfTiming" defaultValue:NO tag:31];
     }
 }
@@ -6423,6 +6524,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 30:key=@"beadHideLandscape";break;
         case 31:key=@"perfTiming";break;
         case 32:key=@"scrollHaptic";break;
+        case 33:key=@"logsEnabled";break;
         case 25:key=@"autoCheckUpdate";break;
         case 26:key=@"autoLaunchLastApp";break;
         case 4:key=AppPref();break;
@@ -6460,6 +6562,22 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(sw.tag==20) {
         if(sw.isOn) { self.appsScrollOffset=0; [self rememberCurrentApp]; }
         FMLog(@"recent-apps-first",sw.isOn?@"on":@"off");
+    }
+    if(sw.tag==33) {
+        // 先落配置再切开关：关掉时这条日志本身就不写了。
+        [LCOrbitLog setLoggingEnabled:sw.isOn];
+        if(sw.isOn) FMLog(@"logs-enabled",@"on");
+    }
+    if(sw.tag==31 && sw.isOn) {
+        // 排查完很容易忘了关：10 分钟后自动关掉，避免日志把展开拖慢。
+        __weak typeof(self) weakSelf=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(600*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            typeof(self) strongSelf=weakSelf;
+            if(!strongSelf || !BoolPref(@"perfTiming",NO)) return;
+            SetPref(@"perfTiming",@NO);
+            [strongSelf updateSettingsContent];
+            FMLog(@"perf-timing",@"auto-off");
+        });
     }
     if(sw.tag==3||sw.tag==7||sw.tag==8) [self draw];
 }
@@ -8917,6 +9035,8 @@ static BOOL FMRowHiddenWithBead(UIView *row,FMDockGroup group) {
 @implementation LCFloatingMenuModule
 - (NSString *)moduleIdentifier { return @"FloatingMenu"; }
 - (void)orbitDidStartWithContext:(LCOrbitContext *)context {
+    // 总开关最先应用：后面所有 FMLog / TweakAudit 都会读它。
+    [LCOrbitLog setLoggingEnabled:BoolPref(@"logsEnabled",YES)];
     [[FMManager shared] invalidatePendingLaunch];
     [FMManager shared].orbitContext=context;
     BOOL hostUI=FMHostUI();

@@ -46,6 +46,13 @@
     [self refreshCurrent];
 }
 - (void)refreshCurrent {
+    // 总开关关掉后连读盘都不做：日志页只是排错工具，关闭态就该是"零开销"。
+    if(![LCOrbitLog loggingEnabled]) {
+        self.logText.text=@"运行日志已关闭\n\n"
+            @"开启路径：设置 → 性能诊断 → 运行日志\n"
+            @"关闭状态下不写入、不读取任何日志记录。";
+        return;
+    }
     if(self.tweakAudit) [LCOrbitTweakAudit captureSnapshot];
     NSData *data=[self allLogData];
     NSString *content=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -60,6 +67,10 @@
     self.logText.text=content;
 }
 - (void)exportCurrent {
+    if(![LCOrbitLog loggingEnabled]) {
+        [self showInfo:@"运行日志已关闭，先到 设置 → 性能诊断 打开。"];
+        return;
+    }
     NSData *data=[self allLogData];
     if(!data.length) { [self showInfo:@"暂无可导出的日志"]; return; }
     NSString *name=self.tweakAudit?@"LCOrbit-Tweaks.json":@"LCOrbit-Runtime.json";

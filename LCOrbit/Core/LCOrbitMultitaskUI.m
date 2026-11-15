@@ -999,6 +999,8 @@ static void PiPStopped(id manager,SEL selector,id controller) {
     }
     // Persist visibility across deferred native Dock animations and mode changes.
     SyncNativeDockSurface();
+    // 兜底：窗口增删后重新对一次状态栏期望值（未变化时是空操作）。
+    UpdateHostStatusBarVisibility();
     if(Fullscreen() && found.count) {
         InstallFinalSceneHook();
         UIViewController *active=[self activeWindow];

@@ -181,6 +181,8 @@ static void AuditItem(NSURL *url, BOOL recursive, NSString *scope,
 }
 + (NSString *)logPath { return [LCOrbitLog pathForKind:@"tweaks"]; }
 + (NSString *)captureSnapshot {
+    // 日志总开关关掉时连扫描都省了：这条审计每写一次都要遍历镜像与 plist。
+    if(![LCOrbitLog loggingEnabled]) return nil;
     NSString *context=nil;
     NSDictionary *guest=nil;
     NSString *root=AuditTweakRoot(&context,&guest);
