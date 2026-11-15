@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b20"
+#define FM_MENU_VERSION @"1.0.36v31b21"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2779,6 +2779,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         [self.orb removeFromSuperview];self.orb=nil;
         return;
     }
+    // 收起状态且面板还热：保留它，只重画微珠。以前这里无条件销毁，导致每次启停 App
+    // 触发 refreshUI 之后，下一次展开都要整页重建（实测 build≈550ms，复用只要 ~60ms）。
+    if(!self.isOpen && _panelWarm && self.panel) {
+        [self drawOrb];
+        return;
+    }
     [self removePanel];
     _panelWarm=NO;
     [self drawOrb];
@@ -3118,8 +3124,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         BOOL reuse=sameStructure && [signature isEqualToString:_panelWarmSignature?:@""];
         // 只有运行状态变了：面板内容一字未动，直接复用；角标由 requestAppsRefresh 那条链路同步。
         BOOL structureOnly=sameStructure && !reuse;
-        // 只有运行状态变了：面板内容一字未动，签名跟上就算已完成复用。
-        if(structureOnly) _panelWarmSignature=signature;
+        // 只有运行状态变了：面板内容一字未动，就地同步角标后直接复用。
+        if(structureOnly) {
+            _panelWarmSignature=signature;
+            [self syncCloseBadges];
+        }
         CFTimeInterval buildMs=0;
         if(reuse||structureOnly) {
             // 这里不做全量同步：真实的状态变化一定会先经过配置通知（面板开着就
