@@ -183,6 +183,8 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 @implementation LCOrbitGuestService (DrawerFixture)
 + (NSArray *)fixtureApps { return FixtureApps; }
 + (BOOL)fixtureCurrent:(NSDictionary *)app { return FixtureCurrent && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
+// 底栏"关闭当前任务"现在先问 activeTaskKey 有没有活动任务，这里跟随 FixtureCurrent。
++ (NSDictionary *)fixtureActiveTaskKey { return FixtureCurrent?@{@"bundle":@"fixture",@"uuid":@"fixture",@"folder":@"fixture"}:nil; }
 @end
 @interface LCOrbitMultitask (DrawerFixture) @end
 @implementation LCOrbitMultitask (DrawerFixture)
@@ -1305,7 +1307,7 @@ static void RunTests(void) {
     Results=[NSMutableArray array];Managers=[NSMutableArray array];AutoPiPStates=[NSMutableDictionary dictionary];GitHubCompletions=[NSMutableArray array];NSMutableArray *apps=[NSMutableArray array];
     for(NSUInteger i=0;i<8;i++) {NSString *folder=[home stringByAppendingFormat:@"/Documents/Fixture%lu.app",(unsigned long)i];[NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];[@{@"CFBundleName":[NSString stringWithFormat:@"App %lu",(unsigned long)i]} writeToFile:[folder stringByAppendingPathComponent:@"Info.plist"] atomically:YES];[apps addObject:@{@"folder":folder,@"title":[NSString stringWithFormat:@"App %lu",(unsigned long)i],@"identity":folder,@"path":folder,@"launchable":@YES}];}FixtureApps=apps;
     SwapClass(LCOrbitGuestService.class,@selector(installedApps),@selector(fixtureApps));SwapClass(LCOrbitGuestService.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));
-    SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
+    SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(activeTaskKey),@selector(fixtureActiveTaskKey));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
     SwapClass(LCOrbitMultitask.class,@selector(automaticPiPEnabledForGuest:),@selector(fixtureAutoPiP:));
     SwapClass(LCOrbitMultitask.class,@selector(setAutomaticPiPEnabled:forGuest:error:),@selector(fixtureSetAutoPiP:forGuest:error:));
     SwapClass(LCOrbitTweakSync.class,@selector(pluginInventory),@selector(fixturePluginInventory));

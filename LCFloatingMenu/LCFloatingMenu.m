@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b27"
+#define FM_MENU_VERSION @"1.0.36v31b28"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2100,9 +2100,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (NSSet<NSString *> *)runningComposites;
 - (BOOL)appIsRunning:(NSDictionary *)app;
 - (void)scheduleWarmPanelBuild;
+- (void)scheduleWarmPanelBuildAfter:(NSTimeInterval)delay;
 - (void)prebuildWarmPanel;
 - (void)schedulePanelRelease;
 - (void)invalidateAppsScan;
+- (void)updateFooterActions;
 - (void)parkClosedPanel;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
@@ -4291,11 +4293,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (CGFloat)menuHeaderDepth { return 58; }
 // 展开时才建面板要 ~590ms（图标解码 + 19 个格子 + AutoLayout）。既然面板本来就是
 // 常驻的，就在 LC 主界面稳定后先建好再藏起来，用户第一次展开直接走复用路径。
-- (void)scheduleWarmPanelBuild {
-    if(_warmBuildScheduled || _panelWarm || self.isOpen) return;
+- (void)scheduleWarmPanelBuild { [self scheduleWarmPanelBuildAfter:0.4]; }
+- (void)scheduleWarmPanelBuildAfter:(NSTimeInterval)delay {
+    // 面板是否"已经是最新"交给 prebuildWarmPanel 判断：启动 App 后排序会变，
+    // 面板虽然还热（parkClosedPanel 保留了对象），内容却是旧的，必须允许重建。
+    if(_warmBuildScheduled || self.isOpen) return;
     _warmBuildScheduled=YES;
     __weak typeof(self) weakSelf=self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(MAX(0,delay)*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         typeof(self) strongSelf=weakSelf;
         if(!strongSelf) return;
         strongSelf->_warmBuildScheduled=NO;
@@ -4303,7 +4308,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     });
 }
 - (void)prebuildWarmPanel {
-    if(_prebuilding || self.isOpen || _panelWarm || !self.window || self.settingsWindow) return;
+    if(_prebuilding || self.isOpen || !self.window || self.settingsWindow) return;
     // 正在拖微珠/跑展开动画时别抢主线程：等下一次机会。
     // 手指刚碰过屏幕（1.2 秒内）就先让路：否则 590ms 的构建会把用户这一下点击也吞掉。
     if(_isPanning || _morphActive || CACurrentMediaTime()-_lastTouchAt<1.2) {
@@ -4314,7 +4319,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(![LCOrbitMultitask shouldShowFloatingMenu]) return;
     if(self.launchPending) return;
-    if(!self.apps.count) {
+    // 已经有一块"签名对得上"的热面板就不用动；对不上说明数据变了（典型：刚启动一个
+    // App，"上次打开"排序变了），拆掉重建 —— 这一步放在后台，用户展开时就是现成的。
+    BOOL stale=NO;
+    if(_panelWarm && self.panel) {
+        NSString *signature=[self panelSignature];
+        NSString *structure=[self panelSignatureIncludingRunning:NO];
+        if([signature isEqualToString:_panelWarmSignature?:@""] &&
+           [structure isEqualToString:_panelWarmStructure?:@""]) return;
+        [self removePanel];
+        _panelWarm=NO;_panelWarmSignature=nil;_panelWarmStructure=nil;
+        stale=YES;
+    }
+    if(!self.apps.count || stale) {
         self.apps=InstalledApps();
         _appsScanAt=CACurrentMediaTime();
     }
@@ -4340,6 +4357,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
     _panelWarm=self.panel!=nil;
     if(_panelWarm) [self schedulePanelRelease];
+    [self updateFooterActions];
     if(_drawDeferred) { _drawDeferred=NO; [self draw]; }
     FMLogDeferred(@"panel-prebuild",_panelWarm?@"warm":@"failed");
 }
@@ -5198,6 +5216,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
+        // 按下就给触感（不等抬手），和面板里的图标点击同一套发生器。
+        [button addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchDown];
+        if([spec[0] isEqualToString:@"xmark.circle"]) button.tag=9302;
         [button addTarget:self action:NSSelectorFromString(spec[1])
                     forControlEvents:UIControlEventTouchUpInside];
         if([spec[0] isEqualToString:@"house.fill"]) {
@@ -5300,6 +5321,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         FMLogDeferred(@"panel-release",@"idle-10min");
     });
 }
+// 没有活动任务时把"关闭当前任务"淡下去（保留可点，点了会解释原因）。
+- (void)updateFooterActions {
+    UIControl *close=[self.panel viewWithTag:9302];
+    if(!close) return;
+    BOOL active=[LCOrbitMultitask activeTaskKey]!=nil;
+    close.alpha=active?1.0:.35;
+    close.accessibilityHint=active?@"轻触关闭当前任务，长按关闭全部":@"当前没有多任务 App";
+}
 - (void)syncCloseBadges { [self syncCloseBadges:NO]; }
 // showRunning=YES 用于"展开前"对齐：运行中的一律显示红叉；
 // 通知链路仍用 NO，避免点完 X 关闭动画期间把角标闪回来。
@@ -5373,6 +5402,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if([runningKeys containsObject:key]) { if(showRunning) badges[key].hidden=NO; continue; }
         badges[key].hidden=YES;
     }
+    [self updateFooterActions];
     // 界面已与数据对齐，签名同步，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
     _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
@@ -6932,6 +6962,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         if([LCOrbitGuestService markGuestLaunched:target]) [manager invalidateAppsScan];
         FMLog(@"switch-accepted",multitask?@"host-multitask":@"classic");
         manager.isOpen=NO;[manager draw];
+        // 启动会改变"上次打开"排序 → 抽屉的排序指纹失效。趁用户在新 App 里，
+        // 后台把抽屉按新顺序建好，下次展开就不用再等 ~250ms 重建。
+        [manager scheduleWarmPanelBuildAfter:2.5];
     });
 }
 - (void)showMultitaskMenuExpanded:(BOOL)expanded {
@@ -6974,6 +7007,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         if([app[@"path"] isEqualToString:path] && [app[@"uuid"] isEqualToString:uuid]) {
             FMRememberOpenedApp(app);
             if([LCOrbitGuestService markGuestLaunched:app]) [self invalidateAppsScan];
+            [self scheduleWarmPanelBuildAfter:2.5];
             break;
         }
     }
@@ -7134,11 +7168,15 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     [self draw];
 }
 - (void)closeMultitaskGuest {
+    if(![LCOrbitMultitask activeTaskKey]) {
+        [self showMessage:@"当前没有多任务 App" details:@"先从微珠打开一个 App，或切到某个任务后再试。"];
+        return;
+    }
     for(NSDictionary *app in self.apps)
         if([LCOrbitMultitask isCurrentGuest:app]) {
             [self closeApp:app sender:nil collapse:YES];return;
         }
-    [self showMessage:@"没有当前任务" details:@"先从微珠打开或切回一个 App。"];
+    [self showMessage:@"当前没有多任务 App" details:@"先从微珠打开一个 App，或切到某个任务后再试。"];
 }
 - (void)restart {
     if(FMHostUI()) return;

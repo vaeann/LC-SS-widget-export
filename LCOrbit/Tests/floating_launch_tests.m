@@ -141,6 +141,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 - (void)refreshUI;
 - (void)requestAppsRefresh;
 - (void)invalidateAppsScan;
+- (void)scheduleWarmPanelBuildAfter:(NSTimeInterval)delay;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
@@ -153,6 +154,7 @@ static FMManager *Manager;
 + (instancetype)shared { return Manager; }
 - (void)persistAppsScroll {}
 - (void)invalidateAppsScan {}
+- (void)scheduleWarmPanelBuildAfter:(NSTimeInterval)delay {}
 - (void)cancelAppearanceCheck {}
 - (void)draw {}
 - (void)refreshUI {}
