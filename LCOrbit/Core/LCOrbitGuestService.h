@@ -13,6 +13,10 @@ typedef NS_ENUM(NSInteger, LCOrbitGuestError) {
 // Each item carries a scope-aware identity, launchable flag and concise status.
 + (NSArray<NSDictionary*> *)installedApps;
 // 安装/隐藏/锁定发生变化后调用，下一次 installedApps 会重新扫描。
+// 微珠从自己的抽屉启动 App 时，LC 的 App 列表启动流程不会执行，
+// 因此 LCAppInfo.plist 的 lastLaunched 不会更新 → "上次打开"排序停在原位。
+// 这里按 LC 自己的写法补一次（它同样是直接改这个键并整份保存）。
++ (BOOL)markGuestLaunched:(NSDictionary *)app;
 + (void)invalidateInstalledAppsCache;
 // 复用 LiveContainer 自己的排序设置（LCAppSortType / LCCustomSortOrder）。
 + (NSString *)appSortType;

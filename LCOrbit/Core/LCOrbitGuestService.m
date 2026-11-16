@@ -255,6 +255,19 @@ NSString *const LCOrbitGuestErrorDomain=@"LCOrbitGuestErrorDomain";
 @implementation LCOrbitGuestService
 + (NSArray<NSDictionary *> *)installedApps { return ScanInstalledApps(nil); }
 + (void)invalidateInstalledAppsCache { FMInventoryCacheValid=NO; }
++ (BOOL)markGuestLaunched:(NSDictionary *)app {
+    if(![app isKindOfClass:NSDictionary.class]) return NO;
+    NSString *folder=String(app[@"folder"]);
+    if(!folder.length) return NO;
+    NSString *path=[folder stringByAppendingPathComponent:@"LCAppInfo.plist"];
+    NSDictionary *existing=[NSDictionary dictionaryWithContentsOfFile:path];
+    if(![existing isKindOfClass:NSDictionary.class]) return NO;
+    NSMutableDictionary *info=[existing mutableCopy];
+    info[@"lastLaunched"]=[NSDate date];
+    if(![info writeToFile:path atomically:YES]) return NO;
+    [self invalidateInstalledAppsCache];
+    return YES;
+}
 // LC 把排序方式存在 app group 的偏好里（LCAppSortType / LCCustomSortOrder）。
 // 微珠直接复用，避免自己再维护一份"最近打开"清单。
 static NSDictionary *LCHostPreferences(void) {

@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b26"
+#define FM_MENU_VERSION @"1.0.36v31b27"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2158,6 +2158,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CFTimeInterval _foregroundAt,_runningAt;
     // 最近一次用户触摸时刻：预建要避开手指，不能和点击抢主线程。
     CFTimeInterval _lastTouchAt;
+    // 建面板时的宿主几何与安全区：展开前若发现不一致，说明容器换了尺寸（启动 App、
+    // 转屏、分屏），需要按新几何重新贴边；一致时保持原样，不动任何位置。
+    CGSize _panelHostSize;
+    UIEdgeInsets _panelBuildSafe;
     NSString *_foregroundCompositeCache;
     NSSet<NSString *> *_runningCompositeCache;
     // 后台预建：LC 主界面稳定后先把面板建好（隐藏），首次展开就不必再等 ~590ms。
@@ -2731,19 +2735,15 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     FMLog(@"settings-gesture",@"orb-long-press");
     [self openSettings];
 }
-- (void)holdPanel:(UILongPressGestureRecognizer *)gesture {
-    if(gesture.state!=UIGestureRecognizerStateBegan) return;
-    if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    FMLog(@"settings-gesture",@"panel-long-press");
-    [self openSettings];
-}
 // 面板内容签名：布局/尺寸/主题/每个 App 的隐藏与运行状态，任一变化都必须重建。
 - (NSString *)panelSignature { return [self panelSignatureIncludingRunning:YES]; }
 // 结构签名不带"某 App 是否在跑"：启停一个任务只影响角标/呼吸灯，不该触发整页重建。
 - (NSString *)panelSignatureIncludingRunning:(BOOL)includeRunning {
     NSMutableString *signature=[NSMutableString string];
-    CGRect bounds=self.window?self.window.bounds:CGRectZero;
+    // 和 buildPanel 同口径：面板几何按它自己的容器算，双方不一致会导致签名
+    // 与实际尺寸对不上（反复重建或复用错尺寸）。
+    CGRect bounds=self.overlayView.bounds.size.width>0?self.overlayView.bounds:
+        (self.window?self.window.bounds:CGRectZero);
     UIEdgeInsets insets=self.window?self.window.safeAreaInsets:UIEdgeInsetsZero;
     // 面板高度按 safeTop / safeBottom 算（buildPanel 4061 行），键盘或宿主窗口
     // 变化会改这两个值，不写进签名就会复用旧高度、底部被切。
@@ -3267,7 +3267,41 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 // Reads the resting geometry of the freshly built drawer and the docked bead.
 // The drawer is slid toward the screen edge by the gap between the two walls
 // (landscape safe area) and along its height so the bead lies inside it.
+// 复用面板不会重算 frame，而宿主容器可能在两次展开之间换了尺寸
+// （启动 App 后立即展开、转屏、分屏、从设置返回）。每次展开前按当前容器校正，
+// 代价是一次几何比较，比重新建面板便宜两个数量级。
+- (void)alignPanelToEdge {
+    UIView *panel=self.panel;
+    if(!panel) return;
+    UIView *host=panel.superview ?: self.window;
+    CGRect hostBounds=host.bounds;
+    if(hostBounds.size.width<90 || hostBounds.size.height<90) return;
+    CGFloat scale=panel.transform.a;
+    if(!isfinite(scale) || scale<=0) return;
+    CGSize size=panel.bounds.size;
+    CGFloat visualW=size.width*scale,visualH=size.height*scale;
+    if(!isfinite(visualW) || visualW<=0 || !isfinite(visualH) || visualH<=0) return;
+    UIEdgeInsets safe=self.window.safeAreaInsets;
+    // 几何没变就不动：正常复用路径一次比较就返回，避免给动画引入多余位移。
+    if(CGSizeEqualToSize(_panelHostSize,hostBounds.size) &&
+       UIEdgeInsetsEqualToEdgeInsets(_panelBuildSafe,safe)) return;
+    _panelHostSize=hostBounds.size;
+    _panelBuildSafe=safe;
+    BOOL small=[self.page isEqualToString:@"apps"];
+    CGFloat edgeInset=(self.left?safe.left:safe.right)+(small?0:10);
+    CGFloat centerX=self.left?(edgeInset+visualW*.5):(hostBounds.size.width-edgeInset-visualW*.5);
+    CGFloat safeTop=MAX(38,safe.top+6);
+    CGFloat safeBottom=MAX(26,safe.bottom+10);
+    if(FMHostUI()) safeBottom=MAX(safeBottom,100);
+    CGFloat top=panel.center.y-visualH*.5;
+    CGFloat maxTop=MAX(safeTop,hostBounds.size.height-safeBottom-visualH);
+    top=Clamp(top,safeTop,maxTop);
+    panel.center=CGPointMake(centerX,top+visualH*.5);
+}
 - (BOOL)prepareDrawerMorph {
+    // 先贴边再取静止几何：morph 的位移是拿 panel.frame 和微珠算的，
+    // 带着旧位置进来就会从错的地方展开、最后停在错的地方。
+    [self alignPanelToEdge];
     UIView *panel=self.panel,*glass=[panel viewWithTag:9230],*orb=self.orb;
     CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
     if(!panel || !orb || !self.window || ![clip isKindOfClass:CAShapeLayer.class]) return NO;
@@ -3568,11 +3602,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 // bead under the finger, and a flick or a long enough drag closes it.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
     if([gestureRecognizer isKindOfClass:UILongPressGestureRecognizer.class]) {
-        // A long press over an app row belongs to the scrub lens (but not on a
-        // close badge); anywhere else it still opens settings.
+        // 面板长按已移除，剩下的长按只有列表上的"按住扫选"。
+        if(gestureRecognizer.view!=self.appsScroll) return NO;
         CGPoint point=[gestureRecognizer locationInView:self.appsScroll];
         BOOL overRow=[self scrubRowIndexAtPoint:point]!=NSNotFound;
-        if(gestureRecognizer.view!=self.appsScroll) return !overRow;
         UIView *hit=[self.appsScroll hitTest:point withEvent:nil];
         // 行和图标本身就是控件，一刀切会把整个手势掐死；只在关闭角标上让路。
         BOOL onCloseBadge=NO;
@@ -4289,9 +4322,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     _prebuilding=NO;
     if(!self.panel) { [self scheduleWarmPanelBuild]; return; }
     // 建完立刻藏起来：同一轮 runloop 内设置 hidden，不会闪一帧。
+    // 位置直接用 buildPanel 按当前窗口算好的 center —— 不要套用 _morphRestCenter，
+    // 那是上一次展开的静止中心，转屏/启动 App 后它会带着旧几何。
     CGFloat scale=_morphScale>0?_morphScale:1.0;
     self.panel.transform=CGAffineTransformMakeScale(scale,scale);
-    if(!CGPointEqualToPoint(_morphRestCenter,CGPointZero)) self.panel.center=_morphRestCenter;
     self.panel.hidden=YES;
     self.panel.userInteractionEnabled=NO;
     if(self.dismissLayer) {
@@ -4306,7 +4340,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMLogDeferred(@"panel-prebuild",_panelWarm?@"warm":@"failed");
 }
 - (void)buildPanel {
-    CGRect bounds=self.window.bounds;
+    // 面板挂在 overlay 容器里，边距必须按容器的坐标系算：启动 App / 转屏的那一瞬间，
+    // window 和容器的尺寸可能还不同步，用 window 算会把面板推/拉到容器外面
+    // —— 表现就是"不贴边"或右半边被裁掉。
+    CGRect bounds=self.overlayView.bounds.size.width>0?self.overlayView.bounds:self.window.bounds;
     CGFloat safeTop=MAX(38,self.window.safeAreaInsets.top+6);
     CGFloat safeBottom=MAX(26,self.window.safeAreaInsets.bottom+10);
     BOOL hostUI=FMHostUI();
@@ -4374,10 +4411,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available/actualScale,target);
     if(!isfinite(ph) || ph<=0 || !isfinite(pw) || pw<=0) return;
+    _panelHostSize=bounds.size;
+    _panelBuildSafe=safe;
     if(hostUI && small) {
-        FMLogDeferred(@"panel-layout",[NSString stringWithFormat:@"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu",
+        FMLogDeferred(@"panel-layout",[NSString stringWithFormat:
+            @"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu win=%.0fx%.0f host=%.0fx%.0f safeL=%.0f safeR=%.0f left=%d",
             grid?@"grid":(compact?@"compact":@"normal"),pw,ph,safeBottom,
-            (unsigned long)(compact?compactActions:2),(unsigned long)appCount]);
+            (unsigned long)(compact?compactActions:2),(unsigned long)appCount,
+            self.window.bounds.size.width,self.window.bounds.size.height,
+            self.overlayView.bounds.size.width,self.overlayView.bounds.size.height,
+            safe.left,safe.right,self.left?1:0]);
     }
     CGFloat visualW=pw*actualScale, visualH=ph*actualScale;
     CGFloat edgeInset=(self.left?safe.left:safe.right)+(small?0:10);
@@ -4394,15 +4437,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
     if(small) {
-        // Long-press anywhere on the drawer to enter menu settings, without
-        // replacing normal taps on apps, task-close badges, or the footer.
-        UILongPressGestureRecognizer *settingsHold=
-            [[UILongPressGestureRecognizer alloc] initWithTarget:self
-                                                          action:@selector(holdPanel:)];
-        settingsHold.minimumPressDuration=.65;
-        settingsHold.delegate=self; // yields to the scrub lens over the app rows
-        [shadow addGestureRecognizer:settingsHold];
-        shadow.accessibilityHint=@"长按打开微珠菜单设置";
+        // 面板上没有长按动作：进设置的入口已经有底栏按钮和微珠长按，多一条只会互相抢手势。
         // Dragging the drawer toward its docking edge closes it with the finger.
         UIPanGestureRecognizer *edgePan=[[UIPanGestureRecognizer alloc] initWithTarget:self
                                                                                 action:@selector(panelPan:)];
@@ -5167,6 +5202,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             homeHold.minimumPressDuration=0.38;
             [button addGestureRecognizer:homeHold];
         }
+        // 关闭按钮长按 = 结束所有任务（轻触仍然只关当前那个）。
+        if([spec[0] isEqualToString:@"xmark.circle"]) {
+            UILongPressGestureRecognizer *closeHold=[[UILongPressGestureRecognizer alloc]
+                initWithTarget:self action:@selector(holdCloseButton:)];
+            closeHold.minimumPressDuration=0.45;
+            [button addGestureRecognizer:closeHold];
+            button.accessibilityHint=@"轻触关闭当前任务，长按关闭全部";
+        }
         [footer addSubview:button];
     }
 }
@@ -5350,6 +5393,39 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMLog(@"settings-gesture",@"home-button-long-press");
     [self openSettings];
 }
+- (void)holdCloseButton:(UILongPressGestureRecognizer *)gesture {
+    if(gesture.state!=UIGestureRecognizerStateBegan) return;
+    NSUInteger running=[LCOrbitMultitask runningTaskKeys].count;
+    if(!running) {
+        [self showMessage:@"没有运行中的任务" details:@"当前没有可关闭的 App。"];
+        return;
+    }
+    if(BoolPref(@"haptic",YES)) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    }
+    FMLog(@"close-all-prompt",[NSString stringWithFormat:@"running=%lu",(unsigned long)running]);
+    UIAlertController *alert=[UIAlertController
+        alertControllerWithTitle:@"关闭所有 App？"
+        message:[NSString stringWithFormat:@"当前有 %lu 个运行中的任务，全部结束并返回 LC 主界面。",
+                 (unsigned long)running]
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"否" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"是" style:UIAlertActionStyleDestructive
+        handler:^(UIAlertAction *action) {
+            typeof(self) strongSelf=weakSelf;
+            if(!strongSelf) return;
+            NSUInteger closed=[LCOrbitMultitask closeAllGuests];
+            FMLog(@"close-all",[NSString stringWithFormat:@"closed=%lu",(unsigned long)closed]);
+            strongSelf.isOpen=NO;
+            [strongSelf draw];
+        }]];
+    UIViewController *presenter=self.window.rootViewController ?: self.overlayView.window.rootViewController;
+    if(presenter && !presenter.presentedViewController)
+        [presenter presentViewController:alert animated:YES completion:nil];
+    else
+        FMLog(@"close-all-prompt",@"no-presenter");
+}
 - (void)openSettings {
     [self openSettingsInScene:self.window.windowScene?:[self foregroundScene]];
 }
@@ -5423,7 +5499,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
     }
     self.page=@"apps";
-    self.isOpen=visible;
+    // 从设置返回必须保持"收起"：以前这里跟着 visible 置 YES，等于每次退出设置
+    // 都把抽屉展开，用户要再点一次才收起来。
+    self.isOpen=NO;
     self.apps=InstalledApps();
     if(visible) { [self rememberCurrentApp]; [self loadAppsScroll]; }
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
@@ -6845,6 +6923,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             return;
         }
         FMRememberOpenedApp(target);
+        // LC 的 lastLaunched 是在它自己的 App 列表启动流程里写的（LCAppModel.runApp），
+        // 从微珠启动绕过了那条路径 → "上次打开"排序永远停在原位。这里补写一次。
+        if([LCOrbitGuestService markGuestLaunched:target]) manager->_appsScanAt=0;
         FMLog(@"switch-accepted",multitask?@"host-multitask":@"classic");
         manager.isOpen=NO;[manager draw];
     });
@@ -6887,7 +6968,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     if(![path isEqualToString:@"ui"]) for(NSDictionary *app in self.apps) {
         if([app[@"path"] isEqualToString:path] && [app[@"uuid"] isEqualToString:uuid]) {
-            FMRememberOpenedApp(app);break;
+            FMRememberOpenedApp(app);
+            if([LCOrbitGuestService markGuestLaunched:app]) _appsScanAt=0;
+            break;
         }
     }
     FMLog(@"switch-accepted",@"LCOrbitGuestService");

@@ -369,6 +369,22 @@ static NSDictionary *TaskKeyForEntry(LCOrbitTaskWindow *entry) {
     }
     return Fail(error,@"目标任务已退出，未执行关闭操作。");
 }
++ (NSUInteger)closeAllGuests {
+    if(!NSThread.isMainThread || ![self isEnabled]) return 0;
+    NSUInteger closed=0;
+    for(LCOrbitTaskWindow *entry in [TaskWindows copy]) {
+        id window=entry.window;
+        if(!window) continue;
+        id scene=Call(window,@"appSceneVC");
+        SEL isRunning=NSSelectorFromString(@"isAppRunning"), close=NSSelectorFromString(@"closeWindow");
+        if(![scene respondsToSelector:isRunning] ||
+           !((BOOL(*)(id,SEL))objc_msgSend)(scene,isRunning) ||
+           ![window respondsToSelector:close]) continue;
+        ((void(*)(id,SEL))objc_msgSend)(window,close);
+        closed++;
+    }
+    return closed;
+}
 + (BOOL)closeCurrentGuest {
     id window=[self activeWindow];SEL close=NSSelectorFromString(@"closeWindow");
     if(!window || ![window respondsToSelector:close]) return NO;

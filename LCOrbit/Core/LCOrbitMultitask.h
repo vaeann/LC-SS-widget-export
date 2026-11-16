@@ -33,6 +33,8 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (nullable NSDictionary *)activeTaskKey;
 + (nullable NSDictionary *)foregroundTaskKey;
 + (BOOL)closeGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
+// 一次结束全部运行中的任务（微珠底部"关闭"按钮长按）。返回实际发出关闭请求的个数。
++ (NSUInteger)closeAllGuests;
 + (NSArray *)windows;
 + (nullable id)activeWindow;
 + (void)recordWindow:(id)window bundle:(NSString *)bundle container:(NSString *)container;

@@ -41,7 +41,7 @@ assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open mus
 assert "small?(compact?MIN(25,pw*.33):29):32;" in src, "compact corners must be softer than capsule radius"
 assert src.count("10+compactActions*63+3") == 1, "compact panel footer height must reserve the smaller inset"
 assert "CGFloat height=self.panelFooterHeight;" in src, "footer must use fitted panel height"
-assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
+assert "action:@selector(holdPanel:)" not in src, "drawer long-press settings entry must stay removed (footer button + bead long press cover it)"
 hold=src[src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"):src.index("- (void)draw {",src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"))]
 assert "[self openSettings];" in hold, "bead long press must open settings"
 assert "CGFloat width=MAX(44.,CGRectGetWidth(self.bounds));" in src, "collapsed bead must have a 44pt-wide logical hit region"
@@ -64,7 +64,7 @@ assert "FMPopOutLayer(view.layer,hidden,NO)" in src and "fm.pop.out" in src, "dr
 assert "footer.tag=9232;" in src, "the footer must be findable so its buttons can pop in"
 assert "scrubPress.minimumPressDuration=.28;" in src and "scrubPress.allowableMovement=10;" in src, "a long press on an app must start the scrub lens after 0.28 s"
 assert "[target sendActionsForControlEvents:UIControlEventTouchUpInside]" in src, "letting go on the lens must switch exactly like a tap"
-assert "return !overRow;" in src, "the settings long press must yield to the scrub lens only over the app rows"
+assert "return !overRow;" not in src, "the panel long press was removed; the scrub lens is the only long press left"
 assert "box.tag=9233;" in src, "app icons must be findable so the scrub can enlarge the one under the lens"
 assert "drawer.transform=CGAffineTransformMakeScale(sx,sy)" not in src, "drawer must retain full-sized content during motion"
 assert "(self.left?safe.left:safe.right)+(small?0:10)" in src, "drawer must dock to visible safe edge"
