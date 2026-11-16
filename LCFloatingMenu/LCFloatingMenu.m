@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b25"
+#define FM_MENU_VERSION @"1.0.36v31b26"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -202,7 +202,10 @@ static NSString *FMTaskComposite(NSDictionary *task) {
 }
 static NSString *FMAppComposite(NSDictionary *app) {
     if(![app isKindOfClass:NSDictionary.class]) return nil;
-    return [NSString stringWithFormat:@"%@|%@|%@",app[@"path"]?:@"",app[@"uuid"]?:@"",app[@"folder"]?:@""];
+    // folderKey 是规范化路径（/private/var/...），必须和任务窗口的 entry.folder 同一写法，
+    // 否则运行判定永远为否（红叉、绿点全都不出现）。
+    NSString *folder=app[@"folderKey"]?:app[@"folder"]?:@"";
+    return [NSString stringWithFormat:@"%@|%@|%@",app[@"path"]?:@"",app[@"uuid"]?:@"",folder];
 }
 static NSString *FMAppCaption(NSDictionary *app) {
     NSString *title=app[@"title"] ?: @"";
@@ -2099,6 +2102,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)scheduleWarmPanelBuild;
 - (void)prebuildWarmPanel;
 - (void)schedulePanelRelease;
+- (void)parkClosedPanel;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
@@ -2748,7 +2752,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(FMHostUI()) safeBottom=MAX(safeBottom,100);
     // 微珠的边与纵向位置决定抽屉从哪儿展开（prepareDrawerMorph 用它算位移），
     // 复用面板时若位置变了，抽屉会从旧的一侧冒出来，甚至跑到屏幕外。
-    [signature appendFormat:@"m=%ld dark=%d glass=%d scale=%.2f screen=%.0fx%.0f left=%d orbY=%.3f safe=%.0f/%.0f",
+    [signature appendFormat:@"m=%ld dark=%d glass=%d scale=%.2f screen=%.0fx%.0f left=%d orbY=%.3f safe=%.0f/%.0f|",
         (long)FMMenuLayout(),FMMenuDark()?1:0,FMClearGlassEnabled()?1:0,
         self.panelContentScale,bounds.size.width,bounds.size.height,
         self.left?1:0,self.orbY,safeTop,safeBottom];
@@ -3240,8 +3244,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                 why=[NSString stringWithFormat:@" prev=[%@] now=[%@]",
                      previous.length>220?[previous substringToIndex:220]:previous?:@"",
                      signature.length>220?[signature substringToIndex:220]:signature];
+            NSString *mode=FMMenuGrid()?@"grid":(FMMenuCompact()?@"compact":@"list");
             FMLogDeferred(@"open-timing",[NSString stringWithFormat:
-                @"scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d structure=%d%@",
+                @"mode=%@ sort=%@ scan=%.1f log=%.1f build=%.1f total=%.1f reuse=%d structure=%d%@",
+                mode,[LCOrbitGuestService appSortType],
                 t0>0?(t1-t0)*1000:0,(t1>0?(t2-t1):0)*1000,buildMs,
                 t0>0?(CACurrentMediaTime()-t0)*1000:0,reuse?1:0,structureOnly?1:0,why]);
         }
@@ -3409,6 +3415,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self buildPanel];
     if(![self prepareDrawerMorph]) {
         [self removePanel];
+        _panelWarm=NO;_panelWarmSignature=nil;_panelWarmStructure=nil;
         return NO;
     }
     _morphActive=YES;_morphDragging=YES;_morphOpening=YES;_morphFromBead=YES;
@@ -3487,6 +3494,27 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 // The spring has arrived. Open: hand the drawer back to the user. Closed: a
 // pull that was let go early never moved the bead, so only the drawer goes;
 // a close from the open drawer rebuilds the docked bead.
+// 面板收起后保留对象：还原静止几何、藏起来、恢复微珠可点，并重新安排空闲释放。
+// 所有"关闭"路径都要走这里 —— 只要有一条路径偷偷 removePanel，下一次展开就是
+// 200~600ms 的整页重建（日志里那些 reuse=0 且签名一字不差的重建就是这么来的）。
+- (void)parkClosedPanel {
+    if(!self.panel) { _panelWarm=NO; return; }
+    CGFloat scale=_morphScale>0?_morphScale:1.0;
+    self.panel.transform=CGAffineTransformMakeScale(scale,scale);
+    if(!CGPointEqualToPoint(_morphRestCenter,CGPointZero)) self.panel.center=_morphRestCenter;
+    self.panel.hidden=YES;
+    self.panel.userInteractionEnabled=NO;
+    if(self.dismissLayer) {
+        self.dismissLayer.hidden=YES;
+        self.dismissLayer.userInteractionEnabled=NO;
+    }
+    if(self.orb) {
+        self.orb.userInteractionEnabled=YES;
+        self.orb.accessibilityElementsHidden=NO;
+    }
+    _panelWarm=YES;
+    [self schedulePanelRelease];
+}
 - (void)finishDrawerMorph {
     BOOL open=_morphOpening,fromBead=_morphFromBead;
     [self endDrawerMorph];
@@ -3498,7 +3526,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         if(_drawDeferred) { _drawDeferred=NO; [self draw]; }
     } else if(fromBead && !self.isOpen) {
         BOOL redraw=_drawDeferred;
-        [self removePanel];
+        // 从微珠拉出来又缩回去：面板已经缩到 0，留着比扔掉划算（扔了下次重建 ~250ms）。
+        [self parkClosedPanel];
         if(redraw) { [self draw]; return; }
         self.orbFaded=NO;
         self.orb.alpha=1;
@@ -3512,20 +3541,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         // 面板留在原地（已收缩到 progress 0），隐藏但不销毁：下次展开只跑动画。
         // progress 0 把 transform 缩到 0、center 带偏移，必须还原成静止几何，
         // 否则下次 prepareDrawerMorph 读到 scale<=0 会直接失败，退回重建。
-        if(self.panel) {
-            self.panel.transform=CGAffineTransformMakeScale(_morphScale,_morphScale);
-            self.panel.center=_morphRestCenter;
-        }
-        _panelWarm=self.panel!=nil;
-        [self schedulePanelRelease];
-        self.panel.hidden=YES;
-        self.panel.userInteractionEnabled=NO;
-        if(self.dismissLayer) {
-            self.dismissLayer.hidden=YES;
-            self.dismissLayer.userInteractionEnabled=NO;
-        }
-        self.orb.userInteractionEnabled=YES;
-        self.orb.accessibilityElementsHidden=NO;
+        [self parkClosedPanel];
         self.orbFaded=NO;
         self.orb.alpha=self.orbNormalAlpha?:.72;
         [self scheduleOrbFade];
@@ -3544,6 +3560,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)abortDrawerMorph {
     if(!_morphActive) return;
     [self removePanel];
+    _panelWarm=NO;_panelWarmSignature=nil;_panelWarmStructure=nil;
     self.orbFaded=NO;
     self.orb.alpha=1;
 }
@@ -4567,13 +4584,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         comparator=^NSComparisonResult(id a,id b) {
             return [((NSDictionary *)b)[@"title"] localizedStandardCompare:((NSDictionary *)a)[@"title"]];
         };
-    else if([type isEqualToString:@"lastLaunched"])
+    else if([type isEqualToString:@"last_launched"])
         comparator=^NSComparisonResult(id a,id b) {
-            return [((NSDictionary *)b)[@"lastLaunched"] compare:((NSDictionary *)a)[@"lastLaunched"]];
+            // 日期相同（或都没启动过）时用名称兜底：sort 不稳定，顺序一抖
+            // 结构签名就会变，白重建一次。
+            NSDictionary *x=(NSDictionary *)a,*y=(NSDictionary *)b;
+            NSComparisonResult result=[y[@"lastLaunched"] compare:x[@"lastLaunched"]];
+            return result!=NSOrderedSame?result:[x[@"title"] localizedStandardCompare:y[@"title"]];
         };
     else if([type isEqualToString:@"installationDate"])
         comparator=^NSComparisonResult(id a,id b) {
-            return [((NSDictionary *)b)[@"installedAt"] compare:((NSDictionary *)a)[@"installedAt"]];
+            NSDictionary *x=(NSDictionary *)a,*y=(NSDictionary *)b;
+            NSComparisonResult result=[y[@"installedAt"] compare:x[@"installedAt"]];
+            return result!=NSOrderedSame?result:[x[@"title"] localizedStandardCompare:y[@"title"]];
         };
     else if([type isEqualToString:@"custom"] && custom.count) {
         NSMutableDictionary<NSString *,NSNumber *> *rank=[NSMutableDictionary dictionary];
@@ -5339,6 +5362,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     self.page=@"settings";
     self.isOpen=NO;
     [self removePanel];
+    _panelWarm=NO;_panelWarmSignature=nil;_panelWarmStructure=nil;
     [self.orb removeFromSuperview];self.orb=nil;
     self.previousKeyWindow=nil;
     for(UIWindow *candidate in scene.windows) {

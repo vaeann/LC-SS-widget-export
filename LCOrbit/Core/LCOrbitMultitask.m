@@ -305,6 +305,8 @@ static NSDictionary *TaskKeyForEntry(LCOrbitTaskWindow *entry) {
         SEL isRunning=NSSelectorFromString(@"isAppRunning");
         if(![scene respondsToSelector:isRunning]) continue;
         if(!((BOOL(*)(id,SEL))objc_msgSend)(scene,isRunning)) continue;
+        // 与 isRunningGuest 保持同一套判定：不能关闭的窗口不算可操作任务。
+        if(![window respondsToSelector:NSSelectorFromString(@"closeWindow")]) continue;
         NSDictionary *key=TaskKeyForEntry(entry);
         if(key) [keys addObject:key];
     }

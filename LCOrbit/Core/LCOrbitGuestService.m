@@ -136,6 +136,8 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
                 [diagnostics addObject:[NSString stringWithFormat:@"inventory-skip scope=%@ app=%@ reason=unreadable-info",scope,entry]];
                 continue;
             }
+            // 规范化后的路径要和 LCOrbitMultitask 里的 entry.folder 逐字节可比，
+            // 否则 /var/... 与 /private/var/... 会让"是否在运行"永远判否（b25 红叉/绿点消失的根因）。
             NSString *canonical=Canonical(folder);
             if([seenFolders containsObject:canonical]) continue;
             [seenFolders addObject:canonical];
@@ -171,10 +173,18 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
             BOOL classicOnly=Flag(lc[@"classicMode"]) && (!knownMode || cachedMode.unsignedIntegerValue!=0);
             // LC 自己在 LCAppInfo 里记录安装/最后启动时间，排序直接复用这两个值。
             id launched=lc[@"lastLaunched"], installed=lc[@"installationDate"];
+            // LC 用 NSDate 存（plist 的 <date>），但历史版本/手改配置可能写成时间戳数字。
+            NSDate *launchedDate=[launched isKindOfClass:NSDate.class]?launched:
+                ([launched isKindOfClass:NSNumber.class]?[NSDate dateWithTimeIntervalSince1970:[launched doubleValue]]:nil);
+            NSDate *installedDate=[installed isKindOfClass:NSDate.class]?installed:
+                ([installed isKindOfClass:NSNumber.class]?[NSDate dateWithTimeIntervalSince1970:[installed doubleValue]]:nil);
             [list addObject:@{@"path":entry,@"title":title,@"uuid":uuid?:@"",@"classicOnly":@(classicOnly),
-                @"lastLaunched":[launched isKindOfClass:NSDate.class]?launched:NSDate.distantPast,
-                @"installedAt":[installed isKindOfClass:NSDate.class]?installed:NSDate.distantPast,
-                @"bundle":bundle?:@"",@"folder":folder,@"shared":@(shared),
+                @"lastLaunched":launchedDate?:NSDate.distantPast,
+                @"installedAt":installedDate?:NSDate.distantPast,
+                @"bundle":bundle?:@"",@"folder":folder,
+                // 规范化路径单独给一份：菜单判"谁在跑/谁在前台"要和 LCOrbitMultitask
+                // 的 entry.folder 逐字节比较，而 folder 本身保持原值（单测与展示都用它）。
+                @"folderKey":canonical,@"shared":@(shared),
                 @"hidden":@(hidden),@"locked":@(locked),
                 @"identity":[NSString stringWithFormat:@"%@/%@",scope,entry],
                 @"launchable":@(!reason.length),@"blockReason":reason,@"status":Status(reason)}];

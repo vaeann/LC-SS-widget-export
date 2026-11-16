@@ -71,7 +71,7 @@ assert "(self.left?safe.left:safe.right)+(small?0:10)" in src, "drawer must dock
 assert "button.userInteractionEnabled=!self.isOpen" in src, "hidden bead must not intercept drawer taps"
 assert "self.dismissLayer.userInteractionEnabled=NO" in src, "closing transition must not accept duplicate taps"
 assert 'recentAppsFirst' not in src and 'recentOpenedAppKeys' not in src, "the private recent-order switch must stay removed"
-assert '[LCOrbitGuestService appSortType]' in src and '"lastLaunched"' in src, "menu order must follow LC's own sort setting"
+assert '[LCOrbitGuestService appSortType]' in src and '"last_launched"' in src, "menu order must follow LC's own sort setting (LC enum raw value is last_launched)"
 assert '[self orderedAppsForMenu]' in src, "only launcher should build the display order"
 assert '@"key":@"panelScale",@"title":@"弹出菜单缩放",@"min":@.5,@"max":@1.2' in src, "menu scale must allow 50%"
 page=src[src.index("@implementation FMDockSettingsController"):src.index("// The old standalone entrypoint is now one Orbit module.")]
