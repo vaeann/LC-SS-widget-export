@@ -2,8 +2,8 @@ from pathlib import Path
 src=(Path(__file__).resolve().parents[2]/"LCFloatingMenu/LCFloatingMenu.m").read_text()
 row=src[src.index("- (UIView *)appRow:(NSDictionary *)app {"):src.index("- (UIStackView *)stack {",src.index("- (UIView *)appRow:(NSDictionary *)app {"))]
 compact=src[src.index("- (void)appPage:(UIStackView *)stack {"):src.index("- (void)buildAppHeader:",src.index("- (void)appPage:(UIStackView *)stack {"))]
-assert "isRunningGuest:" in row and "closeTaskFromButton:" in row, "normal list must show close button only for running apps"
-assert "isRunningGuest:" in compact and "closeTaskFromButton:" in compact, "compact tiles must overlay per-running-app close button"
+assert "appIsRunning:" in row and "closeTaskFromButton:" in row, "normal list must show close button only for running apps"
+assert "appIsRunning:" in compact and "closeTaskFromButton:" in compact, "compact tiles must overlay per-running-app close button"
 assert "@selector(closeTaskFromButton:)" in row and "@selector(closeTaskFromButton:)" in compact, "separate close action required"
 assert "closeGuest:target error:&error" in src, "close must use the exact app identity"
 assert "close.frame=CGRectMake(41,0,44,44)" not in compact, "compact close button must not be outside clipped viewport"
@@ -70,10 +70,9 @@ assert "drawer.transform=CGAffineTransformMakeScale(sx,sy)" not in src, "drawer 
 assert "(self.left?safe.left:safe.right)+(small?0:10)" in src, "drawer must dock to visible safe edge"
 assert "button.userInteractionEnabled=!self.isOpen" in src, "hidden bead must not intercept drawer taps"
 assert "self.dismissLayer.userInteractionEnabled=NO" in src, "closing transition must not accept duplicate taps"
-assert 'recentAppsFirst' in src and 'recentOpenedAppKeys' in src, "opt-in recently opened ordering must persist separate from manual order"
-assert 'if(BoolPref(@"recentAppsFirst",NO)) return;' in src, "recent-mode must not save old scroll"
-assert 'self.appsScrollOffset=0;' in src, "recent-mode opening should reset saved scroll"
-assert '[self orderedAppsForMenu]' in src, "only launcher should use recent sort"
+assert 'recentAppsFirst' not in src and 'recentOpenedAppKeys' not in src, "the private recent-order switch must stay removed"
+assert '[LCOrbitGuestService appSortType]' in src and '"lastLaunched"' in src, "menu order must follow LC's own sort setting"
+assert '[self orderedAppsForMenu]' in src, "only launcher should build the display order"
 assert '@"key":@"panelScale",@"title":@"弹出菜单缩放",@"min":@.5,@"max":@1.2' in src, "menu scale must allow 50%"
 page=src[src.index("@implementation FMDockSettingsController"):src.index("// The old standalone entrypoint is now one Orbit module.")]
 assert "@selector(openDock)" in src and "FMDockSettingsController new" in src, "the root settings must open the sidebar page"
