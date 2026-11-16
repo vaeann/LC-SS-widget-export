@@ -2,21 +2,25 @@ from pathlib import Path
 src=(Path(__file__).resolve().parents[2]/"LCFloatingMenu/LCFloatingMenu.m").read_text()
 row=src[src.index("- (UIView *)appRow:(NSDictionary *)app {"):src.index("- (UIStackView *)stack {",src.index("- (UIView *)appRow:(NSDictionary *)app {"))]
 compact=src[src.index("- (void)appPage:(UIStackView *)stack {"):src.index("- (void)buildAppHeader:",src.index("- (void)appPage:(UIStackView *)stack {"))]
-assert "appIsRunning:" in row and "closeTaskFromButton:" in row, "normal list must show close button only for running apps"
-assert "appIsRunning:" in compact and "closeTaskFromButton:" in compact, "compact tiles must overlay per-running-app close button"
-assert "@selector(closeTaskFromButton:)" in row and "@selector(closeTaskFromButton:)" in compact, "separate close action required"
+badge=src[src.index("- (UIButton *)closeBadgeForApp:"):src.index("- (UIView *)appRow:",src.index("- (UIButton *)closeBadgeForApp:"))]
+assert "appIsRunning:" in row and "closeBadgeForApp:" in row, "normal list must show close button only for running apps"
+assert "appIsRunning:" in compact and "closeBadgeForApp:" in compact, "compact and grid tiles must overlay per-running-app close button"
+assert "@selector(closeTaskFromButton:)" in badge and "close.tag=9240;" in badge, "the shared badge factory must wire the close action and keep the sync tag"
+assert "FMCloseBadgeImage(imageSize)" in badge, "the shared badge factory must draw the flat red disc with a white cross"
+assert "关闭 " in badge and "FMAppCaption(app)" in badge, "the shared badge factory must label the badge for accessibility"
 assert "closeGuest:target error:&error" in src, "close must use the exact app identity"
 assert "close.frame=CGRectMake(41,0,44,44)" not in compact, "compact close button must not be outside clipped viewport"
 assert "CGFloat badge=MIN(22,MAX(16,iconSize*.38));" in compact, "compact badge must scale with the icon inside a 16-22pt band"
 assert "[close.centerXAnchor constraintEqualToAnchor:container.centerXAnchor" in compact and "constant:iconSize*.5]" in compact, "compact badge center must sit on the icon top-right corner"
 assert "[close.centerYAnchor constraintEqualToAnchor:container.centerYAnchor" in compact and "constant:-iconSize*.5]" in compact, "compact badge center must sit on the icon top edge"
 assert "[close.widthAnchor constraintEqualToConstant:badge]" in compact, "compact badge diameter must come from the badge, not the panel scale"
-assert "ring.backgroundColor" not in compact and "FMCloseBadgeImage(badge)" in compact, "compact badge must be the flat red disc with a white cross"
+assert "ring.backgroundColor" not in badge, "compact badge must be the flat red disc with a white cross"
 assert "48/MAX(.50,self.panelContentScale?:1)" in src, "enlarged normal close targets must preserve 48 screen points independently of switching"
 assert "height:63+closeSize" not in compact, "running apps must not add a close row"
 assert "cellView.enabled=!" not in compact, "a disabled cell would swallow the close badge of the running app"
 assert "row.enabled=![LCOrbitGuestService isCurrentGuest:app]" not in compact, "compact rows must stay enabled so their badge stays tappable"
 grid=compact[compact.index("if(FMMenuGrid()) {"):compact.index("} else if(FMMenuCompact()) {")]
+assert "closeBadgeForApp:" in grid, "grid cells must use the shared badge factory"
 assert "CGFloat badge=MIN(22,MAX(16,icon*.38));" in grid, "grid badge must scale with the icon inside a 16-22pt band"
 assert "constant:icon*.5-badge*.5+5" in grid and "constant:-icon*.5+badge*.5-5" in grid, "grid badge must stay inside the icon so the drawer rim stays clear"
 assert "ring.backgroundColor" not in grid, "grid badge is drawn without a white rim"

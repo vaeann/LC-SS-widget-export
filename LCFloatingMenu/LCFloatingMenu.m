@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b28"
+#define FM_MENU_VERSION @"1.0.36v31b29"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2104,7 +2104,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)prebuildWarmPanel;
 - (void)schedulePanelRelease;
 - (void)invalidateAppsScan;
-- (void)updateFooterActions;
+- (UIButton *)closeBadgeForApp:(NSDictionary *)app imageSize:(CGFloat)imageSize;
 - (void)parkClosedPanel;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
@@ -4067,6 +4067,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     return light;
 }
+// 当前 App 的绿点：尺寸、位置、命中设置两处必须一致（iconViewForApp 建图标时一处，
+// 运行状态变化时就地补一处）。以前各写一遍，改位置要改两处。
+static UIView *FMMakeRunningLight(CGFloat size) {
+    CGFloat side=MIN(13,MAX(10,size*.30));
+    UIView *light=FMRunningBreathingLight(side);
+    light.tag=9241;   // 当前 App 的呼吸灯，运行状态变化时就地同步
+    light.frame=CGRectMake(size-side,size-side,side,side);
+    light.userInteractionEnabled=NO;
+    return light;
+}
 // The icon is a full interactive control: tapping it switches immediately,
 // and long pressing it toggles hidden state. Since it is a UIButton, the
 // scroll view's scrub lens recognizer naturally yields (![hit isKindOfClass:UIButton.class]).
@@ -4106,12 +4116,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL hidden=[app[@"hidden"] boolValue];
     BOOL locked=[app[@"locked"] boolValue];
     if(current) {
-        CGFloat side=MIN(13,MAX(10,size*.30));
-        UIView *light=FMRunningBreathingLight(side);
-        light.tag=9241;   // 当前 App 的呼吸灯，运行状态变化时就地同步
-        light.frame=CGRectMake(size-side,size-side,side,side);
-        light.userInteractionEnabled=NO;
-        [box addSubview:light];
+        [box addSubview:FMMakeRunningLight(size)];
     } else if(hidden) {
         // App 被隐藏时：整体覆盖一层加重的暗色半透明蒙版
         UIView *darkMask=[[UIView alloc] initWithFrame:box.bounds];
@@ -4204,6 +4209,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (CGFloat)appRowHeight {
     return MAX(56,[self taskCloseSize]);
 }
+// 三种布局的关闭角标：尺寸和摆放各不相同，但按钮本体完全一样
+//（红叉图片、tag、无障碍标签、关联的应用、点击回调）。
+// 以前三处各写一遍，改一次样式要改三遍，还容易漏掉某个布局。
+- (UIButton *)closeBadgeForApp:(NSDictionary *)app imageSize:(CGFloat)imageSize {
+    UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
+    [close setImage:FMCloseBadgeImage(imageSize) forState:UIControlStateNormal];
+    close.tag=9240;   // 关闭角标，运行状态变化时就地同步可见性
+    close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
+    objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
+    return close;
+}
 - (UIView *)appRow:(NSDictionary *)app {
     // Standard mode extends the drawer without changing its optical material.
     CGFloat height=[self appRowHeight];
@@ -4253,15 +4270,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     row.frame=CGRectMake(0,0,container.bounds.size.width-closeSize-4,height);
     row.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [container addSubview:row];
-    UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
+    UIButton *close=[self closeBadgeForApp:app imageSize:20];
     close.frame=CGRectMake(container.bounds.size.width-closeSize,(height-closeSize)*.5,
                            closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
-    [close setImage:FMCloseBadgeImage(20) forState:UIControlStateNormal];
-    close.tag=9240;   // 关闭角标，运行状态变化时就地同步可见性
-    close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
-    objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
     [container addSubview:close];
     return container;
 }
@@ -4357,7 +4369,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
     _panelWarm=self.panel!=nil;
     if(_panelWarm) [self schedulePanelRelease];
-    [self updateFooterActions];
     if(_drawDeferred) { _drawDeferred=NO; [self draw]; }
     FMLogDeferred(@"panel-prebuild",_panelWarm?@"warm":@"failed");
 }
@@ -4757,16 +4768,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
                 // 微微冒头；直径随图标缩放 16~22。
                 CGFloat badge=MIN(22,MAX(16,icon*.38));
-                UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
+                UIButton *close=[self closeBadgeForApp:app imageSize:badge];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
-                [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
-                close.tag=9240;
                 close.hidden=!running;
-                close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
-                objc_setAssociatedObject(close,@selector(closeTaskFromButton:),
-                                         app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                [close addTarget:self action:@selector(closeTaskFromButton:)
-                    forControlEvents:UIControlEventTouchUpInside];
                 [cellView addSubview:close];
                 [NSLayoutConstraint activateConstraints:@[
                     [close.centerXAnchor constraintEqualToAnchor:cellView.centerXAnchor
@@ -4850,13 +4854,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 ]];
                 // 与宫格同款角标：红底无描边，圆心钉在图标右上角。
                 CGFloat badge=MIN(22,MAX(16,iconSize*.38));
-                UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
+                UIButton *close=[self closeBadgeForApp:app imageSize:badge];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
-                [close setImage:FMCloseBadgeImage(badge) forState:UIControlStateNormal];
-                close.tag=9240;
-                close.accessibilityLabel=[@"关闭 " stringByAppendingString:FMAppCaption(app)];
-                objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
                 [container addSubview:close];
                 [NSLayoutConstraint activateConstraints:@[
                     [close.centerXAnchor constraintEqualToAnchor:container.centerXAnchor
@@ -5218,7 +5217,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [tile addSubview:glyph];
         // 按下就给触感（不等抬手），和面板里的图标点击同一套发生器。
         [button addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchDown];
-        if([spec[0] isEqualToString:@"xmark.circle"]) button.tag=9302;
         [button addTarget:self action:NSSelectorFromString(spec[1])
                     forControlEvents:UIControlEventTouchUpInside];
         if([spec[0] isEqualToString:@"house.fill"]) {
@@ -5321,14 +5319,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         FMLogDeferred(@"panel-release",@"idle-10min");
     });
 }
-// 没有活动任务时把"关闭当前任务"淡下去（保留可点，点了会解释原因）。
-- (void)updateFooterActions {
-    UIControl *close=[self.panel viewWithTag:9302];
-    if(!close) return;
-    BOOL active=[LCOrbitMultitask activeTaskKey]!=nil;
-    close.alpha=active?1.0:.35;
-    close.accessibilityHint=active?@"轻触关闭当前任务，长按关闭全部":@"当前没有多任务 App";
-}
 - (void)syncCloseBadges { [self syncCloseBadges:NO]; }
 // showRunning=YES 用于"展开前"对齐：运行中的一律显示红叉；
 // 通知链路仍用 NO，避免点完 X 关闭动画期间把角标闪回来。
@@ -5380,12 +5370,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             if([view viewWithTag:9241]) continue;
             CGFloat size=CGRectGetWidth(view.bounds);
             if(size<8) continue;
-            CGFloat side=MIN(13,MAX(10,size*.30));
-            UIView *light=FMRunningBreathingLight(side);
-            light.tag=9241;
-            light.frame=CGRectMake(size-side,size-side,side,side);
-            light.userInteractionEnabled=NO;
-            [view addSubview:light];
+            [view addSubview:FMMakeRunningLight(size)];
         }
     }
     // 角标只在"从来没有过"时才需要重建；刚被隐藏的不算——关闭是异步的，
@@ -5402,7 +5387,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if([runningKeys containsObject:key]) { if(showRunning) badges[key].hidden=NO; continue; }
         badges[key].hidden=YES;
     }
-    [self updateFooterActions];
     // 界面已与数据对齐，签名同步，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
     _panelWarmStructure=[self panelSignatureIncludingRunning:NO];
