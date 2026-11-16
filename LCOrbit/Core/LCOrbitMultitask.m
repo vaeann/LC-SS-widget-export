@@ -321,9 +321,15 @@ static NSDictionary *TaskKeyForEntry(LCOrbitTaskWindow *entry) {
 + (NSDictionary *)foregroundTaskKey {
     id window=ActiveWindow;
     if(!window) return nil;
-    if(![window respondsToSelector:@selector(isViewLoaded)] || ![window isViewLoaded]) return nil;
-    UIView *view=[window respondsToSelector:@selector(view)]?[window view]:nil;
-    if(!view || view.hidden || view.alpha<=.1) return nil;
+    // 这个文件不引 UIKit：全部走动态派发，避免为了两个属性把整棵 UIKit 拖进来。
+    SEL loaded=NSSelectorFromString(@"isViewLoaded");
+    if(![window respondsToSelector:loaded] || !((BOOL(*)(id,SEL))objc_msgSend)(window,loaded)) return nil;
+    SEL viewSelector=NSSelectorFromString(@"view");
+    if(![window respondsToSelector:viewSelector]) return nil;
+    id view=((id(*)(id,SEL))objc_msgSend)(window,viewSelector);
+    if(!view) return nil;
+    if(((BOOL(*)(id,SEL))objc_msgSend)(view,NSSelectorFromString(@"isHidden"))) return nil;
+    if(((double(*)(id,SEL))objc_msgSend)(view,NSSelectorFromString(@"alpha"))<=.1) return nil;
     return [self activeTaskKey];
 }
 + (BOOL)isRunningGuest:(NSDictionary *)guest {
