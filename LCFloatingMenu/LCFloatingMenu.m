@@ -2102,6 +2102,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)scheduleWarmPanelBuild;
 - (void)prebuildWarmPanel;
 - (void)schedulePanelRelease;
+- (void)invalidateAppsScan;
 - (void)parkClosedPanel;
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
@@ -2458,6 +2459,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CGFloat y=self.appsScroll.contentOffset.y;
     if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
 }
+// 清单刚被写过（例如补记了启动时间）时，让下一次展开立刻重新扫描。
+// 单独抽成方法是为了让启动流程的单测能用空实现桩住，不必暴露 ivar。
+- (void)invalidateAppsScan { _appsScanAt=0; }
 - (void)persistAppsScroll {
     [self captureAppsScroll];
     CGFloat y=self.appsScrollOffset;
@@ -6925,7 +6929,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         FMRememberOpenedApp(target);
         // LC 的 lastLaunched 是在它自己的 App 列表启动流程里写的（LCAppModel.runApp），
         // 从微珠启动绕过了那条路径 → "上次打开"排序永远停在原位。这里补写一次。
-        if([LCOrbitGuestService markGuestLaunched:target]) manager->_appsScanAt=0;
+        if([LCOrbitGuestService markGuestLaunched:target]) [manager invalidateAppsScan];
         FMLog(@"switch-accepted",multitask?@"host-multitask":@"classic");
         manager.isOpen=NO;[manager draw];
     });
@@ -6969,7 +6973,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(![path isEqualToString:@"ui"]) for(NSDictionary *app in self.apps) {
         if([app[@"path"] isEqualToString:path] && [app[@"uuid"] isEqualToString:uuid]) {
             FMRememberOpenedApp(app);
-            if([LCOrbitGuestService markGuestLaunched:app]) _appsScanAt=0;
+            if([LCOrbitGuestService markGuestLaunched:app]) [self invalidateAppsScan];
             break;
         }
     }

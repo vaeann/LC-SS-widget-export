@@ -106,6 +106,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 @end
 @interface LCOrbitGuestService : NSObject
 + (BOOL)launchGuest:(NSDictionary *)app error:(NSError **)error;
++ (BOOL)markGuestLaunched:(NSDictionary *)app;
 @end
 @implementation LCOrbitGuestService
 + (BOOL)launchGuest:(NSDictionary *)app error:(NSError **)error {
@@ -117,6 +118,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
     if([LCOrbitMultitask isEnabled]) MultitaskLaunches++; else ClassicLaunches++;
     return YES;
 }
++ (BOOL)markGuestLaunched:(NSDictionary *)app { (void)app;return YES; }
 @end
 @interface FMManager : NSObject
 @property(nonatomic,strong) UIWindow *window,*settingsWindow,*previousKeyWindow;
@@ -138,6 +140,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 - (void)draw;
 - (void)refreshUI;
 - (void)requestAppsRefresh;
+- (void)invalidateAppsScan;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
@@ -149,6 +152,7 @@ static FMManager *Manager;
 @implementation FMManager
 + (instancetype)shared { return Manager; }
 - (void)persistAppsScroll {}
+- (void)invalidateAppsScan {}
 - (void)cancelAppearanceCheck {}
 - (void)draw {}
 - (void)refreshUI {}
