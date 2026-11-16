@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b24"
+#define FM_MENU_VERSION @"1.0.36v31b25"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -195,6 +195,15 @@ static NSDictionary *GuestInfo(void) { return [LCOrbitHost guestInfo]; }
 static BOOL FMHostUI(void) { return [LCOrbitHost isHostUI]; }
 static NSString *GuestID(void) { return [LCOrbitHost guestIdentifier]; }
 static NSString *FMAppKey(NSDictionary *app) { return app[@"identity"] ?: app[@"path"] ?: @""; }
+// 任务窗口与 App 词条用同一套三要素拼键，避免为每个 App 单独解析 canonical 路径。
+static NSString *FMTaskComposite(NSDictionary *task) {
+    if(![task isKindOfClass:NSDictionary.class]) return nil;
+    return [NSString stringWithFormat:@"%@|%@|%@",task[@"bundle"]?:@"",task[@"uuid"]?:@"",task[@"folder"]?:@""];
+}
+static NSString *FMAppComposite(NSDictionary *app) {
+    if(![app isKindOfClass:NSDictionary.class]) return nil;
+    return [NSString stringWithFormat:@"%@|%@|%@",app[@"path"]?:@"",app[@"uuid"]?:@"",app[@"folder"]?:@""];
+}
 static NSString *FMAppCaption(NSDictionary *app) {
     NSString *title=app[@"title"] ?: @"";
     NSString *state=[LCOrbitGuestService isCurrentGuest:app]?@"当前":app[@"status"];
@@ -306,18 +315,8 @@ static void FMRememberOpenedApp(NSDictionary *app) {
     if(![app isKindOfClass:NSDictionary.class] || [app[@"builtin"] boolValue]) return;
     NSString *key=FMAppKey(app);
     if(!key.length || [key isEqualToString:@"ui"] || [key isEqualToString:@"builtin/SideStore"]) return;
-    // 始终记录最后活跃的应用标识，供“启动自动打开上次应用”功能使用
+    // 只记录最后活跃标识（供"启动自动打开上次应用"），排序交给 LC 自己。
     SetPref(@"lastActiveAppKey",key);
-    if(!BoolPref(@"recentAppsFirst",NO)) return;
-    id stored=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
-    NSArray *previous=[stored isKindOfClass:NSArray.class]?stored:@[];
-    if([previous.firstObject isEqualToString:key]) return;
-    NSMutableArray<NSString *> *recent=[NSMutableArray arrayWithObject:key];
-    for(id item in previous) {
-        if([item isKindOfClass:NSString.class] && ![item isEqualToString:key] && recent.count<40)
-            [recent addObject:item];
-    }
-    SetPref(@"recentOpenedAppKeys",recent);
 }
 
 
@@ -2094,6 +2093,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)syncCloseBadges;
 - (void)syncCloseBadges:(BOOL)showRunning;
 - (BOOL)appIsForeground:(NSDictionary *)app;
+- (NSString *)foregroundComposite;
+- (NSSet<NSString *> *)runningComposites;
+- (BOOL)appIsRunning:(NSDictionary *)app;
 - (void)scheduleWarmPanelBuild;
 - (void)prebuildWarmPanel;
 - (void)schedulePanelRelease;
@@ -2148,6 +2150,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     NSString *_panelWarmStructure;
     // 应用清单的最近一次扫描时刻：展开太频繁时不必每次都重新校验（服务层校验要 stat 40 个文件）。
     CFTimeInterval _appsScanAt;
+    // "谁在跑 / 谁在前台"的短缓存（200ms）：一次构建/一次同步内只取一次快照。
+    CFTimeInterval _foregroundAt,_runningAt;
+    // 最近一次用户触摸时刻：预建要避开手指，不能和点击抢主线程。
+    CFTimeInterval _lastTouchAt;
+    NSString *_foregroundCompositeCache;
+    NSSet<NSString *> *_runningCompositeCache;
     // 后台预建：LC 主界面稳定后先把面板建好（隐藏），首次展开就不必再等 ~590ms。
     BOOL _warmBuildScheduled,_prebuilding;
     // 空闲释放用的代次：每次收起 +1，展开再 +1，旧的一次性任务自然失效。
@@ -2241,6 +2249,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!self.screenTouchObserver) {
         __weak typeof(self) weakSelf=self;
         self.screenTouchObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitScreenTouchedNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            typeof(self) strongSelf=weakSelf;
+            if(strongSelf) strongSelf->_lastTouchAt=CACurrentMediaTime();
             [weakSelf wakeOrb];
         }];
     }
@@ -2441,7 +2451,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
 }
 - (void)persistAppsScroll {
-    if(BoolPref(@"recentAppsFirst",NO)) return; // Opening resets to top; do not overwrite saved OFF-mode position.
     [self captureAppsScroll];
     CGFloat y=self.appsScrollOffset;
     if(!isfinite(y)) return;
@@ -2454,11 +2463,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
 }
 - (void)loadAppsScroll {
-    if(BoolPref(@"recentAppsFirst",NO)) {
-        self.appsScrollOffset=0;
-        FMLogDeferred(@"apps-scroll-reset",@"recent-apps-first");
-        return;
-    }
     id saved=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
     if([saved isKindOfClass:NSNumber.class] && isfinite([saved doubleValue])) {
         self.appsScrollOffset=MAX(0,[saved doubleValue]);
@@ -2760,26 +2764,29 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     for(NSDictionary *app in self.apps) {
         [signature appendFormat:@"|%@:%d%d",app[@"identity"],
             [app[@"hidden"] boolValue]?1:0,
-            includeRunning?([LCOrbitMultitask isRunningGuest:app]?1:0):0];
+            includeRunning?([self appIsRunning:app]?1:0):0];
     }
-    // 最近打开置顶会改变行顺序，而顺序变了旧面板就是错的：把它写进结构签名，
-    // 顺序一变就走重建（不开这个开关的人不受影响，签名内容一字不变）。
-    if(includeRunning==NO && BoolPref(@"recentAppsFirst",NO)) {
-        // 只取最近 12 个 + 当前前台：足够反映"置顶"变化，又不必为签名排一次全序。
-        id stored=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
-        NSArray *recent=[stored isKindOfClass:NSArray.class]?stored:@[];
-        NSArray *top=recent.count>12?[recent subarrayWithRange:NSMakeRange(0,12)]:recent;
-        NSString *foreground=@"none";
-        for(NSDictionary *app in self.apps)
-            if([self appIsForeground:app]) { foreground=FMAppKey(app);break; }
-        [signature appendFormat:@"|order=%@|top=%@",[top componentsJoinedByString:@","],foreground];
+    // 顺序完全由 LC 的排序设置决定。按 lastLaunched / 安装时间 / 自定义这几种会随
+    // 使用变化的排序，才把前 8 个顺序指纹写进结构签名（字母序不会白重建）。
+    if(includeRunning==NO) {
+        NSString *type=[LCOrbitGuestService appSortType];
+        [signature appendFormat:@"|sort=%@",type];
+        if(!([type isEqualToString:@"default"] || [type isEqualToString:@"alphabetical"] ||
+             [type isEqualToString:@"reverse_alphabetical"])) {
+            NSArray<NSDictionary *> *ordered=[self orderedAppsForMenu];
+            NSMutableArray<NSString *> *head=[NSMutableArray array];
+            NSUInteger limit=MIN(ordered.count,(NSUInteger)8);
+            for(NSUInteger index=0;index<limit;index++) [head addObject:FMAppKey(ordered[index])];
+            [signature appendFormat:@"|order=%@",[head componentsJoinedByString:@","]];
+        }
     }
     // 前台 App（绿点归属）也算"运行态"：回到 LC 界面后它会变 none，
     // 展开时因此走一次就地同步，把残留的绿点摘掉。
     if(includeRunning) {
         NSString *foreground=@"none";
-        for(NSDictionary *app in self.apps)
-            if([self appIsForeground:app]) { foreground=FMAppKey(app);break; }
+        NSString *composite=[self foregroundComposite];
+        if(composite) for(NSDictionary *app in self.apps)
+            if([FMAppComposite(app) isEqualToString:composite]) { foreground=FMAppKey(app);break; }
         [signature appendFormat:@"|fg=%@",foreground];
     }
     return signature;
@@ -3175,6 +3182,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         _panelReleaseToken++;   // 取消上一次收起安排的释放
         t0=CACurrentMediaTime();
         [self cancelOrbFade];
+        _lastTouchAt=CACurrentMediaTime();
         [self loadAppsScroll];
     } else {
         [self persistAppsScroll];
@@ -4159,7 +4167,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     title.lineBreakMode=NSLineBreakByTruncatingTail;
     [row addSubview:title];
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
-    BOOL running=[LCOrbitMultitask isRunningGuest:app];
+    BOOL running=[self appIsRunning:app];
     UIImageView *arrow=[[UIImageView alloc] initWithImage:
         [UIImage systemImageNamed:@"chevron.right"]];
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
@@ -4233,7 +4241,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(_warmBuildScheduled || _panelWarm || self.isOpen) return;
     _warmBuildScheduled=YES;
     __weak typeof(self) weakSelf=self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2.0*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         typeof(self) strongSelf=weakSelf;
         if(!strongSelf) return;
         strongSelf->_warmBuildScheduled=NO;
@@ -4243,7 +4251,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)prebuildWarmPanel {
     if(_prebuilding || self.isOpen || _panelWarm || !self.window || self.settingsWindow) return;
     // 正在拖微珠/跑展开动画时别抢主线程：等下一次机会。
-    if(_isPanning || _morphActive) { [self scheduleWarmPanelBuild]; return; }
+    // 手指刚碰过屏幕（1.2 秒内）就先让路：否则 590ms 的构建会把用户这一下点击也吞掉。
+    if(_isPanning || _morphActive || CACurrentMediaTime()-_lastTouchAt<1.2) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.6*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            [self scheduleWarmPanelBuild];
+        });
+        return;
+    }
     if(![LCOrbitMultitask shouldShowFloatingMenu]) return;
     if(self.launchPending) return;
     if(!self.apps.count) {
@@ -4512,8 +4526,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 if([LCOrbitMultitask windows].count==0) SetPref(@"lastActiveAppKey",@"ui");
                 return;
             }
-            for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
-                if([LCOrbitMultitask isCurrentGuest:app]) {
+            NSString *active=FMTaskComposite([LCOrbitMultitask activeTaskKey]);
+            if(active) for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+                if([FMAppComposite(app) isEqualToString:active]) {
                     FMRememberOpenedApp(app);
                     return;
                 }
@@ -4536,31 +4551,51 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (NSArray<NSDictionary *> *)orderedAppsForMenu {
     NSArray<NSDictionary *> *apps=[self visibleApps];
-    if(!BoolPref(@"recentAppsFirst",NO) || apps.count<2) return apps;
-    id preference=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
-    NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
-    // 当前 App 只认"真的在屏幕上"的那一个：回 LC 界面后旧窗口还活着，
-    // 用 isCurrentGuest 会把它继续顶在最前面（和绿点判定保持一致）。
-    NSString *foregroundKey=nil;
+    if(apps.count<2) return apps;
+    // 排序完全交给 LC（LCAppSortType / LCCustomSortOrder），微珠只保证"隐藏的排最后"。
+    NSString *type=[LCOrbitGuestService appSortType];
+    NSArray<NSString *> *custom=[LCOrbitGuestService customSortOrder];
+    NSMutableArray<NSDictionary *> *shown=[NSMutableArray array],*hidden=[NSMutableArray array];
     for(NSDictionary *app in apps)
-        if([self appIsForeground:app]) { foregroundKey=FMAppKey(app);break; }
-    NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
-    [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
-        BOOL hiddenA=[a[@"hidden"] boolValue];
-        BOOL hiddenB=[b[@"hidden"] boolValue];
-        if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-        BOOL currentA=foregroundKey && [FMAppKey(a) isEqualToString:foregroundKey];
-        BOOL currentB=foregroundKey && [FMAppKey(b) isEqualToString:foregroundKey];
-        if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger indexA=[recent indexOfObject:FMAppKey(a)];
-        NSUInteger indexB=[recent indexOfObject:FMAppKey(b)];
-        if(indexA!=indexB) return indexA<indexB?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger manualA=[apps indexOfObjectIdenticalTo:a];
-        NSUInteger manualB=[apps indexOfObjectIdenticalTo:b];
-        return manualA<manualB?NSOrderedAscending:manualA>manualB?NSOrderedDescending:NSOrderedSame;
-    }];
-    return sorted;
+        if([app[@"hidden"] boolValue]) [hidden addObject:app]; else [shown addObject:app];
+    NSComparisonResult (^comparator)(id,id)=nil;
+    if([type isEqualToString:@"alphabetical"])
+        comparator=^NSComparisonResult(id a,id b) {
+            return [((NSDictionary *)a)[@"title"] localizedStandardCompare:((NSDictionary *)b)[@"title"]];
+        };
+    else if([type isEqualToString:@"reverse_alphabetical"])
+        comparator=^NSComparisonResult(id a,id b) {
+            return [((NSDictionary *)b)[@"title"] localizedStandardCompare:((NSDictionary *)a)[@"title"]];
+        };
+    else if([type isEqualToString:@"lastLaunched"])
+        comparator=^NSComparisonResult(id a,id b) {
+            return [((NSDictionary *)b)[@"lastLaunched"] compare:((NSDictionary *)a)[@"lastLaunched"]];
+        };
+    else if([type isEqualToString:@"installationDate"])
+        comparator=^NSComparisonResult(id a,id b) {
+            return [((NSDictionary *)b)[@"installedAt"] compare:((NSDictionary *)a)[@"installedAt"]];
+        };
+    else if([type isEqualToString:@"custom"] && custom.count) {
+        NSMutableDictionary<NSString *,NSNumber *> *rank=[NSMutableDictionary dictionary];
+        for(NSUInteger index=0;index<custom.count;index++) rank[custom[index]]=@(index);
+        comparator=^NSComparisonResult(id a,id b) {
+            // LC 的自定义排序键是 "bundleId:relativeBundlePath"。
+            NSDictionary *x=(NSDictionary *)a,*y=(NSDictionary *)b;
+            NSNumber *left=rank[[NSString stringWithFormat:@"%@:%@",x[@"bundle"]?:@"",x[@"path"]?:@""]];
+            NSNumber *right=rank[[NSString stringWithFormat:@"%@:%@",y[@"bundle"]?:@"",y[@"path"]?:@""]];
+            if(left && right) return [left compare:right];
+            if(left) return NSOrderedAscending;
+            if(right) return NSOrderedDescending;
+            return [x[@"title"] localizedStandardCompare:y[@"title"]];
+        };
+    }
+    if(comparator) {
+        [shown sortUsingComparator:comparator];
+        [hidden sortUsingComparator:comparator];
+    }
+    return [shown arrayByAddingObjectsFromArray:hidden];
 }
+
 - (NSArray<NSString*> *)favorites {
     NSArray *v=[HostDefaults() arrayForKey:Pref(@"favoritePaths")];
     return [v isKindOfClass:NSArray.class]?v:@[];
@@ -4638,7 +4673,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     forControlEvents:UIControlEventTouchUpInside];
                 // 关闭角标常驻：运行状态只切 hidden，不增删节点。
                 // 这样"打开 App 后才需要显示红叉"永远不用整页重建（实测 ~550ms）。
-                BOOL running=[LCOrbitMultitask isRunningGuest:app];
+                BOOL running=[self appIsRunning:app];
                 // 关闭角标：红底无描边。圆心沿 45° 右上探出 2，视觉上从图标角
                 // 微微冒头；直径随图标缩放 16~22。
                 CGFloat badge=MIN(22,MAX(16,icon*.38));
@@ -4721,7 +4756,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [row addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
-            if([LCOrbitMultitask isRunningGuest:app]) {
+            if([self appIsRunning:app]) {
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
                 // switching and keeps running/nonrunning rows equally tall.
@@ -5148,13 +5183,33 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 // 绿点（呼吸灯）只代表"这个 App 此刻正显示在屏幕上"。回到 LC 主界面后，
 // 任务窗口往往还活着、ActiveWindow 也没清，只看 isCurrentGuest 会一直亮。
+- (NSString *)foregroundComposite {
+    CFTimeInterval now=CACurrentMediaTime();
+    if(now-_foregroundAt<.2) return _foregroundCompositeCache;
+    _foregroundAt=now;
+    _foregroundCompositeCache=FMTaskComposite([LCOrbitMultitask foregroundTaskKey]);
+    return _foregroundCompositeCache;
+}
+- (NSSet<NSString *> *)runningComposites {
+    CFTimeInterval now=CACurrentMediaTime();
+    if(now-_runningAt<.2 && _runningCompositeCache) return _runningCompositeCache;
+    _runningAt=now;
+    NSMutableSet<NSString *> *set=[NSMutableSet set];
+    for(NSDictionary *task in [LCOrbitMultitask runningTaskKeys]) {
+        NSString *composite=FMTaskComposite(task);
+        if(composite) [set addObject:composite];
+    }
+    _runningCompositeCache=[set copy];
+    return _runningCompositeCache;
+}
+- (BOOL)appIsRunning:(NSDictionary *)app {
+    NSString *composite=FMAppComposite(app);
+    return composite && [[self runningComposites] containsObject:composite];
+}
 - (BOOL)appIsForeground:(NSDictionary *)app {
-    if(![LCOrbitGuestService isCurrentGuest:app]) return NO;
-    id window=[LCOrbitMultitask activeWindow];
-    // 没加载视图的控制器不能碰 .view：那会触发 loadView，反而制造一次布局。
-    if(![window respondsToSelector:@selector(isViewLoaded)] || ![window isViewLoaded]) return NO;
-    UIView *view=[window respondsToSelector:@selector(view)]?[window view]:nil;
-    return view && !view.hidden && view.alpha>.1;
+    // 一次取快照再比字符串：以前每个 App 都要走 isCurrentGuest（含 canonical 路径解析）。
+    NSString *foreground=[self foregroundComposite];
+    return foreground && [FMAppComposite(app) isEqualToString:foreground];
 }
 // 运行状态变化只影响两类标记：关闭角标与当前 App 的呼吸灯。
 // 就地增删/显隐，不重建整页——整页重建会移除并重新创建所有格子，视觉上就是"点完 X 闪一下"。
@@ -5183,12 +5238,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!root) return;
     // 先把运行状态一次性算成集合：下面要按节点、按角标多次判断，
     // 每次现查 isRunningGuest 会遍历 LC 的任务窗口，整轮下来很贵。
+    NSSet<NSString *> *runningComposites=[self runningComposites];
+    NSString *foregroundComposite=[self foregroundComposite];
     NSMutableSet<NSString *> *runningKeys=[NSMutableSet set];
     NSString *currentKey=nil;
     for(NSDictionary *app in self.apps) {
         NSString *key=FMAppKey(app);
-        if([LCOrbitMultitask isRunningGuest:app]) [runningKeys addObject:key];
-        if(!currentKey && [self appIsForeground:app]) currentKey=key;
+        NSString *composite=FMAppComposite(app);
+        if(composite && [runningComposites containsObject:composite]) [runningKeys addObject:key];
+        if(!currentKey && foregroundComposite && [composite isEqualToString:foregroundComposite]) currentKey=key;
     }
     NSMutableArray<UIView *> *nodes=[NSMutableArray array];
     NSMutableArray<UIView *> *lights=[NSMutableArray array];
@@ -5465,12 +5523,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self settingSwitch:s title:@"滚动颗粒感" key:@"scrollHaptic" defaultValue:NO tag:32];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
-        UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
+
         // 启动时自动打开上次退出或使用的页面（若在 LC 主页退出则停留在主页，在子 App 退出则打开子 App）
         UIView *sw7=[self switchRowWithTitle:@"启动上次选择的页面" key:@"autoLaunchLastApp" defaultValue:NO tag:26];
         UIView *sw5=[self switchRowWithTitle:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
-        UIView *appCard=FMCreateGroupedCard(@[sw4,sw7,sw5,sw6],16);
+        UIView *appCard=FMCreateGroupedCard(@[sw7,sw5,sw6],16);
         if(appCard) [s addArrangedSubview:appCard];
     } else if([category isEqualToString:@"compatibility"]) {
         [self compatibilityPage:s];
@@ -5667,8 +5725,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠形态、展开栏布局、透明度与回弹动画",nil,nil,self,@selector(openDock)) height:60 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
-    [self settingSwitch:s title:@"最近打开的 App 置顶"
-                 key:@"recentAppsFirst" defaultValue:NO tag:20];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
@@ -6517,7 +6573,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 3:key=@"showRestart";break;
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
-        case 20:key=@"recentAppsFirst";break;
         case 22:key=@"unlockOrientation";break;
         case 23:key=@"keepScreenAwake";break;
         case 24:key=@"lockBanRightLandscape";break;
@@ -6702,7 +6757,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 - (void)performResetAllSettings {
     [self resetDockSettings];
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
-    SetPref(@"recentAppsFirst",@NO);
     SetPref(@"appearanceMode",@(0));
     SetPref(@"unlockOrientation",@YES);
     SetPref(@"lockBanRightLandscape",@YES);

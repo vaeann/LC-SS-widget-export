@@ -290,6 +290,42 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     ActiveWindow=nil;
     RefreshAutomaticPiP();
 }
+// 统一的任务键：bundle / 容器 uuid / 安装目录。调用方自行拼成字符串比较。
+static NSDictionary *TaskKeyForEntry(LCOrbitTaskWindow *entry) {
+    if(!entry || ![entry.bundle isKindOfClass:NSString.class]) return nil;
+    return @{@"bundle":entry.bundle?:@"",@"uuid":entry.container?:@"",@"folder":entry.folder?:@""};
+}
++ (NSArray<NSDictionary *> *)runningTaskKeys {
+    if(!NSThread.isMainThread || ![self isEnabled]) return @[];
+    NSMutableArray<NSDictionary *> *keys=[NSMutableArray array];
+    for(LCOrbitTaskWindow *entry in [TaskWindows copy]) {
+        id window=entry.window;
+        if(!window) continue;
+        id scene=Call(window,@"appSceneVC");
+        SEL isRunning=NSSelectorFromString(@"isAppRunning");
+        if(![scene respondsToSelector:isRunning]) continue;
+        if(!((BOOL(*)(id,SEL))objc_msgSend)(scene,isRunning)) continue;
+        NSDictionary *key=TaskKeyForEntry(entry);
+        if(key) [keys addObject:key];
+    }
+    return keys;
+}
++ (NSDictionary *)activeTaskKey {
+    if(!NSThread.isMainThread || ![self isEnabled]) return nil;
+    id window=ActiveWindow;
+    if(!window) return nil;
+    for(LCOrbitTaskWindow *entry in [TaskWindows copy])
+        if(entry.window==window) return TaskKeyForEntry(entry);
+    return nil;
+}
++ (NSDictionary *)foregroundTaskKey {
+    id window=ActiveWindow;
+    if(!window) return nil;
+    if(![window respondsToSelector:@selector(isViewLoaded)] || ![window isViewLoaded]) return nil;
+    UIView *view=[window respondsToSelector:@selector(view)]?[window view]:nil;
+    if(!view || view.hidden || view.alpha<=.1) return nil;
+    return [self activeTaskKey];
+}
 + (BOOL)isRunningGuest:(NSDictionary *)guest {
     if(!NSThread.isMainThread || ![self isEnabled] || ![guest isKindOfClass:NSDictionary.class] ||
        !TaskPathComponent(guest[@"path"]) || !TaskPathComponent(guest[@"uuid"])) return NO;

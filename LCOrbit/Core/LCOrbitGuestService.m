@@ -169,7 +169,11 @@ static NSArray<NSDictionary *> *ScanInstalledApps(NSMutableArray<NSString *> *di
             BOOL knownMode=[cachedMode isKindOfClass:NSNumber.class] && [cachedSystem isKindOfClass:NSNumber.class] &&
                 cachedSystem.integerValue==NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
             BOOL classicOnly=Flag(lc[@"classicMode"]) && (!knownMode || cachedMode.unsignedIntegerValue!=0);
+            // LC 自己在 LCAppInfo 里记录安装/最后启动时间，排序直接复用这两个值。
+            id launched=lc[@"lastLaunched"], installed=lc[@"installationDate"];
             [list addObject:@{@"path":entry,@"title":title,@"uuid":uuid?:@"",@"classicOnly":@(classicOnly),
+                @"lastLaunched":[launched isKindOfClass:NSDate.class]?launched:NSDate.distantPast,
+                @"installedAt":[installed isKindOfClass:NSDate.class]?installed:NSDate.distantPast,
                 @"bundle":bundle?:@"",@"folder":folder,@"shared":@(shared),
                 @"hidden":@(hidden),@"locked":@(locked),
                 @"identity":[NSString stringWithFormat:@"%@/%@",scope,entry],
@@ -241,6 +245,33 @@ NSString *const LCOrbitGuestErrorDomain=@"LCOrbitGuestErrorDomain";
 @implementation LCOrbitGuestService
 + (NSArray<NSDictionary *> *)installedApps { return ScanInstalledApps(nil); }
 + (void)invalidateInstalledAppsCache { FMInventoryCacheValid=NO; }
+// LC 把排序方式存在 app group 的偏好里（LCAppSortType / LCCustomSortOrder）。
+// 微珠直接复用，避免自己再维护一份"最近打开"清单。
+static NSDictionary *LCHostPreferences(void) {
+    static NSDictionary *cache;
+    static CFAbsoluteTime at;
+    CFAbsoluteTime now=CFAbsoluteTimeGetCurrent();
+    if(cache && now-at<2.0) return cache;
+    at=now;cache=nil;
+    NSString *group=String([LCOrbitHost appGroupPath]);
+    if(!group.length) return nil;
+    NSString *directory=[group stringByAppendingPathComponent:@"Library/Preferences"];
+    for(NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil]) {
+        if(![name.pathExtension isEqualToString:@"plist"]) continue;
+        NSDictionary *document=[NSDictionary dictionaryWithContentsOfFile:
+            [directory stringByAppendingPathComponent:name]];
+        if([document isKindOfClass:NSDictionary.class]) { cache=document;break; }
+    }
+    return cache;
+}
++ (NSString *)appSortType {
+    id value=LCHostPreferences()[@"LCAppSortType"];
+    return [value isKindOfClass:NSString.class]?value:@"default";
+}
++ (NSArray<NSString *> *)customSortOrder {
+    id value=LCHostPreferences()[@"LCCustomSortOrder"];
+    return [value isKindOfClass:NSArray.class]?value:@[];
+}
 + (NSArray<NSDictionary *> *)launchableApps {
     NSMutableArray *result=[NSMutableArray array];
     for(NSDictionary *app in ScanInstalledApps(nil)) if(Flag(app[@"launchable"])) [result addObject:app];

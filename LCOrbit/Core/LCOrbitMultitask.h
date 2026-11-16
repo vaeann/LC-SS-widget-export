@@ -27,6 +27,11 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (BOOL)closeCurrentGuest;
 // Exact target close: no fallback to the foreground task or a namesake app.
 + (BOOL)isRunningGuest:(NSDictionary *)guest;
+// 一次性快照：逐 App 查询 isRunningGuest 每次都要解析 canonical 路径（磁盘符号链接），
+// 19 个 App 展开一轮就是几十次系统调用。需要批量判断时改用这三个。
++ (NSArray<NSDictionary *> *)runningTaskKeys;
++ (nullable NSDictionary *)activeTaskKey;
++ (nullable NSDictionary *)foregroundTaskKey;
 + (BOOL)closeGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (NSArray *)windows;
 + (nullable id)activeWindow;

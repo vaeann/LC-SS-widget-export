@@ -14,6 +14,9 @@ typedef NS_ENUM(NSInteger, LCOrbitGuestError) {
 + (NSArray<NSDictionary*> *)installedApps;
 // 安装/隐藏/锁定发生变化后调用，下一次 installedApps 会重新扫描。
 + (void)invalidateInstalledAppsCache;
+// 复用 LiveContainer 自己的排序设置（LCAppSortType / LCCustomSortOrder）。
++ (NSString *)appSortType;
++ (NSArray<NSString *> *)customSortOrder;
 // Only for callers that specifically require a validated quick-launch target.
 + (NSArray<NSDictionary*> *)launchableApps;
 + (NSArray<NSString*> *)inventoryDiagnostics;
