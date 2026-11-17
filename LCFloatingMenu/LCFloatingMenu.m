@@ -38,7 +38,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36v31b29"
+#define FM_MENU_VERSION @"1.0.36v31b30"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -247,6 +247,24 @@ static void FMWarmTapHaptic(void) {
     [FMTapGenerator() prepare];
 }
 
+// 关闭红叉的触感：比普通点击重一档（Medium），表示"这个操作会结束一个任务"。
+// 与微珠长按、长按关闭全部同一种语言；普通点击仍是 Light/Rigid。
+static UIImpactFeedbackGenerator *FMCloseGenerator(void) {
+    static UIImpactFeedbackGenerator *generator;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{
+        generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [generator prepare];
+    });
+    return generator;
+}
+static void FMCloseTick(void) {
+    if(!BoolPref(@"haptic",YES)) return;
+    UIImpactFeedbackGenerator *generator=FMCloseGenerator();
+    if(@available(iOS 13.0,*)) [generator impactOccurredWithIntensity:.7];
+    else [generator impactOccurred];
+    [generator prepare];   // 立刻为下一次预热
+}
 static CGFloat FloatPref(NSString *key,CGFloat def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v doubleValue]:def;
@@ -4209,6 +4227,22 @@ static UIView *FMMakeRunningLight(CGFloat size) {
 - (CGFloat)appRowHeight {
     return MAX(56,[self taskCloseSize]);
 }
+// 列表行：红叉显示时行宽让出 closeSize+4，隐藏时还回去。
+// 行宽在建行那一刻就按"是否运行"定死了，只切红叉的 hidden 会让关掉 App 后右侧一直空一条。
+// 网格/精简的行没有 9252 标记，这里直接跳过，不受影响。
+static void FMSyncListRowInset(UIButton *close, BOOL visible) {
+    if(![close isKindOfClass:UIButton.class]) return;
+    close.hidden=!visible;
+    UIView *container=close.superview;
+    UIView *row=[container viewWithTag:9252];
+    if(!row) return;
+    CGFloat closeSize=CGRectGetWidth(close.bounds);
+    CGFloat full=CGRectGetWidth(container.bounds);
+    CGFloat target=visible?(full-closeSize-4):full;
+    if(target<=1) return;
+    if(fabs(CGRectGetWidth(row.frame)-target)<.5) return;
+    row.frame=CGRectMake(0,0,target,CGRectGetHeight(row.frame));
+}
 // 三种布局的关闭角标：尺寸和摆放各不相同，但按钮本体完全一样
 //（红叉图片、tag、无障碍标签、关联的应用、点击回调）。
 // 以前三处各写一遍，改一次样式要改三遍，还容易漏掉某个布局。
@@ -4225,6 +4259,7 @@ static UIView *FMMakeRunningLight(CGFloat size) {
     // Standard mode extends the drawer without changing its optical material.
     CGFloat height=[self appRowHeight];
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,216,height)];
+    row.tag=9252;   // 列表行标记：红叉显隐时用它同步行宽（网格/精简没有这个标记）
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
     // Localized contrast only under list text, not behind the entire glass.
@@ -5215,8 +5250,9 @@ static UIView *FMMakeRunningLight(CGFloat size) {
         glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
-        // 按下就给触感（不等抬手），和面板里的图标点击同一套发生器。
-        [button addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchDown];
+        // 与图标点击完全一致：同一个回调、同一套发生器、同样在抬手时触发。
+        // 之前用 TouchDown 会让底栏"按下就响"，手指压着时和抬手时的手感不一样。
+        [button addTarget:self action:@selector(fmTapTick:) forControlEvents:UIControlEventTouchUpInside];
         [button addTarget:self action:NSSelectorFromString(spec[1])
                     forControlEvents:UIControlEventTouchUpInside];
         if([spec[0] isEqualToString:@"house.fill"]) {
@@ -5384,8 +5420,9 @@ static UIView *FMMakeRunningLight(CGFloat size) {
     }
     if(missing) { [self refreshAppsContent]; return; }
     for(NSString *key in badges) {
-        if([runningKeys containsObject:key]) { if(showRunning) badges[key].hidden=NO; continue; }
-        badges[key].hidden=YES;
+        BOOL running=[runningKeys containsObject:key];
+        if(running) { if(showRunning) FMSyncListRowInset(badges[key],YES); continue; }
+        FMSyncListRowInset(badges[key],NO);
     }
     // 界面已与数据对齐，签名同步，收起后仍可复用。
     _panelWarmSignature=[self panelSignature];
@@ -7132,11 +7169,14 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         return;
     }
     // 角标直接消失：不做 enabled 灰化，也不整页重建，避免点击后那一下过渡。
-    sender.hidden=YES;
+    // 列表行还要把让出去的宽度一起还回来，否则这一行右侧会空一条。
+    if([sender isKindOfClass:UIButton.class]) FMSyncListRowInset((UIButton *)sender,NO);
+    else sender.hidden=YES;
     FMLog(@"task-close-requested",FMAppKey(target));
     if(collapse) { self.isOpen=NO;[self draw]; }
 }
 - (void)closeTaskFromButton:(UIControl *)sender {
+    FMCloseTick();
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
     [self closeApp:app sender:sender collapse:NO];
 }
